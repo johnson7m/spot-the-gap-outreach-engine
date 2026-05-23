@@ -1,0 +1,49 @@
+{
+  "name": "spot-the-gap-outreach-engine",
+  "version": "0.1.0",
+  "description": "Internal Visible Gap platform for assessment intake, CRM synchronization, lead intelligence, and future AI-assisted outreach.",
+  "private": true,
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "node --check src/server.js",
+    "check:staging": "node scripts/validateStagingReadiness.js",
+    "test:sync:dry": "node scripts/runAssessmentSyncTest.js",
+    "test:sync:live": "LIVE_TEST=true node scripts/runAssessmentSyncTest.js",
+    "test:webhook:staging": "node scripts/sendStagingWebhookTest.js"
+  },
+  "keywords": [
+    "visible-gap",
+    "spot-the-gap",
+    "crm",
+    "outreach",
+    "twenty-crm",
+    "lead-intelligence"
+  ],
+  "author": "Visible Gap",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.106.1",
+    "axios": "^1.16.1",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "helmet": "^8.2.0",
+    "openai": "^6.39.0",
+    "pino": "^10.3.1",
+    "pino-http": "^11.0.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14",
+    "supertest": "^7.2.2",
+    "vitest": "^4.1.7"
+  }
+}
