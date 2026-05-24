@@ -66,6 +66,31 @@ x-visible-gap-secret: <WEBHOOK_SECRET>
 
 If custom headers are not available in the Netlify UI path being used, put the webhook behind a small Netlify Function/proxy that adds the header before forwarding to the engine.
 
+For the current Visible Gap website, use the Netlify Function proxy path. Do not
+also configure a direct outgoing webhook for the same `assessment` form while
+this function is deployed, because both paths would forward the same submission.
+
+The website repo includes:
+
+```text
+consulting-landing-page/netlify/functions/submission-created.mjs
+```
+
+Netlify automatically invokes this function after a verified form submission is
+created. The function filters to the `assessment` form only, adds
+`x-visible-gap-secret`, and forwards the original Netlify payload to the Render
+engine endpoint.
+
+Required website-side Netlify environment variables:
+
+```bash
+SPOT_GAP_ENGINE_WEBHOOK_URL=https://<render-service>.onrender.com/webhooks/netlify/spot-the-gap
+SPOT_GAP_ENGINE_WEBHOOK_SECRET=<same-value-as-engine-WEBHOOK_SECRET>
+```
+
+The function does not modify the public assessment form, scoring logic,
+thank-you redirect, or user-visible copy.
+
 ## Expected Payload
 
 The engine accepts both object and URL-encoded string payload forms.
@@ -141,21 +166,25 @@ curl -X POST http://localhost:3000/webhooks/netlify/spot-the-gap \
 
 ## Staging Test
 
-1. Keep `TWENTY_SYNC_ENABLED=false`.
-2. Configure `WEBHOOK_SECRET`.
-3. Run:
+1. Keep Render `TWENTY_SYNC_ENABLED=false`.
+2. Configure Render `WEBHOOK_SECRET`.
+3. Configure Netlify `SPOT_GAP_ENGINE_WEBHOOK_URL`.
+4. Configure Netlify `SPOT_GAP_ENGINE_WEBHOOK_SECRET`.
+5. Deploy the website with the `submission-created` function.
+6. Submit one obviously fake/test assessment through the public website.
+7. Run:
 
 ```bash
 npm run check:staging
 npm run test:sync:dry
 ```
 
-4. Send one staging webhook payload.
-5. Confirm Supabase records:
+8. Confirm Supabase records:
    - `assessment_submissions`
    - `workflow_jobs`
    - `crm_sync_logs`
-6. Enable controlled live sync only after the dry path is verified.
+9. Confirm CRM sync result remains dry-run.
+10. Enable controlled live sync only after the dry path is verified.
 
 ## Troubleshooting
 

@@ -173,6 +173,13 @@ x-visible-gap-secret: <WEBHOOK_SECRET>
 
 Use this if the direct Netlify outgoing webhook path cannot attach custom headers.
 
+This is the recommended path for the current Visible Gap website because it keeps
+the public assessment UX unchanged while allowing the engine webhook secret to be
+added server-side.
+
+Use either the direct outgoing webhook or this proxy function, not both for the
+same form. Running both paths can forward one Netlify submission twice.
+
 Flow:
 
 ```text
@@ -189,7 +196,22 @@ The proxy function should:
 - Add `x-visible-gap-secret`.
 - Log only status/correlation ID, never the secret.
 
-Do not modify production website behavior until this path is explicitly approved.
+Current website function:
+
+```text
+consulting-landing-page/netlify/functions/submission-created.mjs
+```
+
+Website-side Netlify environment variables:
+
+```bash
+SPOT_GAP_ENGINE_WEBHOOK_URL=https://<engine-domain>/webhooks/netlify/spot-the-gap
+SPOT_GAP_ENGINE_WEBHOOK_SECRET=<same-secret-as-engine-WEBHOOK_SECRET>
+```
+
+The function is backend-only and filters to the `assessment` form before
+forwarding. Do not enable broad production traffic until one dry-run website
+submission has been verified in Supabase.
 
 ## Enabling Live CRM Sync After Dry-Run
 
