@@ -133,12 +133,11 @@ Confirmed roles:
 | `operator` | Everything rep can do plus retry/recovery visibility. |
 | `admin` | Configuration, role management, future integration controls. |
 
-The outreach engine should validate authorization server-side when endpoints are
-implemented. UI-only role checks are not enough. During staging API bring-up,
-Quick Capture commit is protected by a temporary
-`x-visible-gap-workspace-secret` shared secret plus explicit write guards. That
-gate should be replaced by Supabase Auth JWT validation before broader
-production use.
+The outreach engine validates authorization server-side for workspace API
+requests when Supabase JWT verification is enabled. UI-only role checks are not
+enough. During staging API bring-up, Quick Capture commit can still use a
+temporary `x-visible-gap-workspace-secret` fallback for server-side scripts, but
+the browser workspace should send only `Authorization: Bearer <supabase token>`.
 
 ## Environment Variables
 
@@ -159,6 +158,8 @@ Outreach engine variables needed before workspace integration:
 ```bash
 NODE_ENV=production
 SUPABASE_ENABLED=true
+SUPABASE_JWT_VERIFICATION_ENABLED=false
+SUPABASE_AUTH_REQUIRED_FOR_WORKSPACE_API=false
 TWENTY_SYNC_ENABLED=false
 QUICK_CAPTURE_SYNC_ENABLED=false
 QUICK_CAPTURE_API_PREVIEW_ENABLED=true
@@ -170,13 +171,38 @@ SUPABASE_URL=<supabase-project-url>
 SUPABASE_SERVICE_ROLE_KEY=<server-only-service-role-key>
 ```
 
-The outreach engine should verify Supabase Auth JWTs and map users to
-`admin`, `rep`, or `operator` roles when API endpoints are implemented.
+`SUPABASE_SERVICE_ROLE_KEY` stays server-side in the outreach engine. It is used
+to verify Supabase users and read `workspace_profiles`; it must never be exposed
+to the frontend.
+
+Server-side workspace auth flow:
+
+```text
+Authorization bearer token
+  -> Supabase Auth getUser(token)
+  -> workspace_profiles by user_id
+  -> is_active check
+  -> role check
+  -> req.workspaceUser
+```
+
+Resolved roles:
+
+- `admin`
+- `operator`
+- `rep`
 
 For the first workspace preview integration, leave `TWENTY_SYNC_ENABLED=false`
 and `QUICK_CAPTURE_API_COMMIT_ENABLED=false`. The UI can safely call
 `POST /api/quick-capture/preview` to render normalized lead data, dedupe
 warnings, CRM payload previews, and the cadence/task plan.
+
+Once Supabase workspace profiles are populated, enable authenticated preview:
+
+```bash
+SUPABASE_JWT_VERIFICATION_ENABLED=true
+SUPABASE_AUTH_REQUIRED_FOR_WORKSPACE_API=true
+```
 
 For a controlled staging commit test, enable all relevant guards deliberately:
 
@@ -184,6 +210,7 @@ For a controlled staging commit test, enable all relevant guards deliberately:
 QUICK_CAPTURE_API_COMMIT_ENABLED=true
 TWENTY_SYNC_ENABLED=true
 SUPABASE_ENABLED=true
+SUPABASE_JWT_VERIFICATION_ENABLED=true
 ```
 
 The browser must never receive Twenty API keys or Supabase service-role keys.

@@ -222,23 +222,40 @@ Preview is always dry-run. It normalizes the lead, builds dedupe warnings,
 generates CRM payload previews, and returns the first task/cadence plan without
 writing to Twenty or Supabase.
 
+Preview auth is configurable:
+
+```bash
+SUPABASE_JWT_VERIFICATION_ENABLED=false
+SUPABASE_AUTH_REQUIRED_FOR_WORKSPACE_API=false
+```
+
+With auth required disabled, staging/dev preview remains available for UI
+compatibility. With auth required enabled, preview requires a valid Supabase
+bearer token, an active `workspace_profiles` row, and role `admin`, `operator`,
+or `rep`.
+
 Commit is staging-gated and requires:
 
 ```bash
 QUICK_CAPTURE_API_COMMIT_ENABLED=true
 TWENTY_SYNC_ENABLED=true
-WORKSPACE_API_SECRET=<server-side-secret>
+SUPABASE_JWT_VERIFICATION_ENABLED=true
 ```
 
-The commit request must include:
+The browser workspace should send:
 
 ```text
-x-visible-gap-workspace-secret: <WORKSPACE_API_SECRET>
+Authorization: Bearer <supabase-access-token>
 ```
+
+The temporary `x-visible-gap-workspace-secret` fallback can remain configured
+server-side for controlled staging scripts, but it should not be sent by the
+browser workspace.
 
 `SUPABASE_ENABLED=true` should be enabled for commit tests so outbound events
 and CRM audit logs are persisted. Commit still routes through the CRM adapter
-and excludes all protected assessment fields.
+and excludes all protected assessment fields. When a workspace user is
+available, outbound event and CRM audit metadata include sanitized role context.
 
 ## Retry And Recovery Model
 

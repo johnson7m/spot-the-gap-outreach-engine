@@ -21,8 +21,8 @@ The system is organized around clear boundaries:
 - `src/server.js`: Express app, health route, webhook route, and error handling.
 - `src/routes/api/`: internal workspace API routes such as Quick Capture
   preview/commit.
-- `src/middleware/`: API middleware such as temporary workspace shared-secret
-  validation.
+- `src/middleware/`: API middleware such as Netlify rate limits, temporary
+  workspace shared-secret validation, and Supabase workspace JWT/profile auth.
 - `src/config/`: environment loading, validation, and logging.
 - `src/integrations/netlifyWebhook.js`: Netlify assessment webhook normalization.
 - `src/integrations/crm/`: provider-neutral CRM adapter boundary.
@@ -86,18 +86,33 @@ POST /api/quick-capture/commit
 
 Preview is dry-run only and is intended for the internal
 `visible-gap-workspace` review screen. Commit is disabled by default and
-requires:
+requires explicit write guards:
 
 ```bash
 QUICK_CAPTURE_API_COMMIT_ENABLED=true
 TWENTY_SYNC_ENABLED=true
-WORKSPACE_API_SECRET=<temporary-workspace-secret>
+SUPABASE_JWT_VERIFICATION_ENABLED=true
 ```
 
-Commit requests must include
-`x-visible-gap-workspace-secret: <WORKSPACE_API_SECRET>`. Set
-`WORKSPACE_ALLOWED_ORIGIN` to the deployed workspace origin when browser CORS
-needs to allow the internal app.
+Workspace API auth uses `Authorization: Bearer <supabase-access-token>`. The
+engine verifies the token through Supabase, loads `workspace_profiles`, rejects
+inactive profiles, and allows `admin`, `operator`, and `rep` roles for Quick
+Capture preview/commit. The legacy
+`x-visible-gap-workspace-secret: <WORKSPACE_API_SECRET>` path remains only as a
+server-configured staging fallback; the browser workspace should not send it.
+Set `WORKSPACE_ALLOWED_ORIGIN` to the deployed workspace origin when browser
+CORS needs to allow the internal app.
+
+Workspace auth flags:
+
+```bash
+SUPABASE_JWT_VERIFICATION_ENABLED=false
+SUPABASE_AUTH_REQUIRED_FOR_WORKSPACE_API=false
+```
+
+Turn both on after the Supabase `workspace_profiles` table is applied and
+profile rows exist for workspace users. `SUPABASE_SERVICE_ROLE_KEY` must stay
+server-side in this engine and must never be exposed to the frontend.
 
 Webhook endpoint:
 

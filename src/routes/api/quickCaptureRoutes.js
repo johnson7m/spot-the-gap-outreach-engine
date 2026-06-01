@@ -2,29 +2,50 @@ import express from 'express';
 import { createCrmAdapter } from '../../integrations/crm/crmAdapter.js';
 import { PROTECTED_ASSESSMENT_FIELDS } from '../../integrations/twenty/quickCaptureClient.js';
 import { createOperationalStore } from '../../persistence/operationalStore.js';
-import { requireWorkspaceSecret } from '../../middleware/workspaceAuth.js';
+import {
+  createSupabaseWorkspaceAuth,
+  requireWorkspaceAuthOrSecret
+} from '../../middleware/supabaseWorkspaceAuth.js';
 import { processQuickCaptureLead } from '../../workflows/outbound/quickCaptureWorkflow.js';
+
+const QUICK_CAPTURE_WORKSPACE_ROLES = ['admin', 'operator', 'rep'];
 
 export function createQuickCaptureApiRouter({
   config = {},
   log,
   processQuickCaptureLeadFn = processQuickCaptureLead,
   createCrmAdapterFn = createCrmAdapter,
-  createOperationalStoreFn = createOperationalStore
+  createOperationalStoreFn = createOperationalStore,
+  workspaceAuthSupabaseClient
 } = {}) {
   const router = express.Router();
 
-  router.post('/preview', async (req, res, next) => {
-    await handleQuickCapturePreview(req, res, next, {
+  router.post(
+    '/preview',
+    createSupabaseWorkspaceAuth({
       config,
       log,
-      processQuickCaptureLeadFn
-    });
-  });
+      required: Boolean(config.supabase?.authRequiredForWorkspaceApi),
+      allowedRoles: QUICK_CAPTURE_WORKSPACE_ROLES,
+      supabaseClient: workspaceAuthSupabaseClient
+    }),
+    async (req, res, next) => {
+      await handleQuickCapturePreview(req, res, next, {
+        config,
+        log,
+        processQuickCaptureLeadFn
+      });
+    }
+  );
 
   router.post(
     '/commit',
-    requireWorkspaceSecret({ config, log }),
+    requireWorkspaceAuthOrSecret({
+      config,
+      log,
+      allowedRoles: QUICK_CAPTURE_WORKSPACE_ROLES,
+      supabaseClient: workspaceAuthSupabaseClient
+    }),
     async (req, res, next) => {
       await handleQuickCaptureCommit(req, res, next, {
         config,
@@ -61,6 +82,7 @@ export async function handleQuickCapturePreview(
       body: req.body,
       config,
       log: req.log ?? log,
+      workspaceUser: req.workspaceUser,
       processQuickCaptureLeadFn
     });
 
@@ -110,6 +132,7 @@ export async function handleQuickCaptureCommit(
       operationalStore,
       dryRun: false,
       persistEvents: Boolean(config.supabase?.enabled),
+      workspaceUser: req.workspaceUser,
       log: req.log ?? log
     });
 
@@ -153,7 +176,7 @@ export async function handleQuickCaptureCommit(
     res.status(statusCode).json(
       successEnvelope({
         correlationId: req.correlationId,
-        data: toCommitResponse({ plan, crmSync, auditLogs }),
+        data: toCommitResponse({ plan, crmSync, auditLogs, workspaceUser: req.workspaceUser }),
         warnings: plan.warnings
       })
     );
@@ -162,7 +185,13 @@ export async function handleQuickCaptureCommit(
   }
 }
 
-async function buildPreviewPlan({ body, config, log, processQuickCaptureLeadFn }) {
+async function buildPreviewPlan({
+  body,
+  config,
+  log,
+  workspaceUser,
+  processQuickCaptureLeadFn
+}) {
   return processQuickCaptureLeadFn({
     input: extractLeadPayload(body),
     config: {
@@ -178,6 +207,7 @@ async function buildPreviewPlan({ body, config, log, processQuickCaptureLeadFn }
     },
     dryRun: true,
     persistEvents: false,
+    workspaceUser,
     log
   });
 }
@@ -204,11 +234,12 @@ function toPreviewResponse(plan) {
     cadencePlan: plan.cadence,
     schemaValidation: plan.schemaValidation,
     protectedFieldCheck: buildProtectedFieldCheck(plan.crmPayloads?.person?.payload),
-    outboundEventPreview: plan.outboundEvent?.planned
+    outboundEventPreview: plan.outboundEvent?.planned,
+    workspaceUser: sanitizeWorkspaceUser(plan.workspaceUser)
   };
 }
 
-function toCommitResponse({ plan, crmSync, auditLogs }) {
+function toCommitResponse({ plan, crmSync, auditLogs, workspaceUser }) {
   return {
     status: crmSync.status,
     normalizedLead: plan.normalizedLead,
@@ -231,6 +262,7 @@ function toCommitResponse({ plan, crmSync, auditLogs }) {
       persisted: auditLogs.length > 0,
       ids: auditLogs.map((record) => record.id)
     },
+    workspaceUser: sanitizeWorkspaceUser(workspaceUser ?? plan.workspaceUser),
     protectedFieldCheck: buildProtectedFieldCheck(plan.crmPayloads?.person?.payload),
     skippedRelationships: crmSync.skippedRelationships ?? []
   };
@@ -311,7 +343,10 @@ async function appendQuickCaptureCrmAuditLogs({ store, plan, crmSync }) {
         dedupeKey: operation.dedupeKey,
         status: normalizeAuditStatus(operation.status),
         attempt: operation.attempts ?? 1,
-        requestPayload: operation.payload,
+        requestPayload: {
+          payload: operation.payload,
+          workspaceUser: sanitizeWorkspaceUser(plan.workspaceUser)
+        },
         responsePayload: operation.response,
         errorPayload: operation.error,
         startedAt,
@@ -321,6 +356,22 @@ async function appendQuickCaptureCrmAuditLogs({ store, plan, crmSync }) {
   }
 
   return logs;
+}
+
+function sanitizeWorkspaceUser(workspaceUser) {
+  if (!workspaceUser) {
+    return null;
+  }
+
+  return {
+    authenticated: Boolean(workspaceUser.authenticated),
+    userId: workspaceUser.userId ?? null,
+    email: workspaceUser.email ?? null,
+    fullName: workspaceUser.fullName ?? null,
+    role: workspaceUser.role ?? null,
+    roleSource: workspaceUser.roleSource ?? null,
+    profileId: workspaceUser.profileId ?? null
+  };
 }
 
 function normalizeAuditStatus(status) {

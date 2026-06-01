@@ -32,17 +32,29 @@ X-Correlation-Id: <optional-client-generated-id>
 Content-Type: application/json
 ```
 
-Authentication is planned around Supabase Auth. `Authorization` should carry the
-Supabase Auth access token. The outreach engine should validate that token and
-authorize actions by role:
+Authentication uses Supabase Auth. `Authorization` carries the Supabase Auth
+access token. When workspace API auth is enabled, the outreach engine verifies
+that token, loads the matching `workspace_profiles` row by `user_id`, rejects
+inactive profiles, and authorizes actions by role:
 
 - `admin`
 - `rep`
 - `operator`
 
-Current staging commit protection uses the temporary
-`x-visible-gap-workspace-secret` header. This shared-secret gate should be
-replaced by Supabase Auth token validation before broader production use.
+The temporary `x-visible-gap-workspace-secret` header remains available only as
+a server-configured fallback for controlled staging compatibility. The browser
+workspace should use `Authorization: Bearer <supabase-access-token>` and should
+not send the shared secret.
+
+Workspace auth flags:
+
+```bash
+SUPABASE_JWT_VERIFICATION_ENABLED=false
+SUPABASE_AUTH_REQUIRED_FOR_WORKSPACE_API=false
+```
+
+Set both to `true` after `workspace_profiles` is populated and the deployed
+workspace sends Supabase access tokens reliably.
 
 ## Common Response Envelope
 
@@ -135,6 +147,15 @@ Environment guard:
 QUICK_CAPTURE_API_PREVIEW_ENABLED=true
 ```
 
+Auth behavior:
+
+- If `SUPABASE_AUTH_REQUIRED_FOR_WORKSPACE_API=false`, preview stays available
+  for staging/dev compatibility and marks unauthenticated requests as
+  `roleSource=unauthenticated/dev`.
+- If `SUPABASE_AUTH_REQUIRED_FOR_WORKSPACE_API=true`, preview requires a valid
+  Supabase bearer token and an active `workspace_profiles` row.
+- Allowed roles: `admin`, `operator`, `rep`.
+
 Request:
 
 ```json
@@ -191,6 +212,15 @@ Response:
       "blockedFields": []
     },
     "outboundEventPreview": {},
+    "workspaceUser": {
+      "authenticated": true,
+      "userId": "auth-user-id",
+      "email": "rep@visiblegap.com",
+      "fullName": "Visible Gap Rep",
+      "role": "rep",
+      "roleSource": "profile",
+      "profileId": "workspace-profile-id"
+    },
     "skippedRelationships": [],
     "warnings": []
   },
@@ -209,11 +239,21 @@ Commits a reviewed Quick Capture lead through the outreach engine workflow and
 CRM adapter. The endpoint accepts the same preferred payload shape as preview:
 `{ "lead": { ... }, "approval": { ... } }`.
 
-Required headers:
+Preferred header:
+
+```text
+Authorization: Bearer <supabase-access-token>
+```
+
+Temporary staging fallback header:
 
 ```text
 x-visible-gap-workspace-secret: <WORKSPACE_API_SECRET>
 ```
+
+The fallback is available only when `WORKSPACE_API_SECRET` is configured on the
+server. It is intended for transitional scripts and should not be used by the
+browser workspace.
 
 Required environment guards:
 
@@ -221,6 +261,14 @@ Required environment guards:
 QUICK_CAPTURE_API_COMMIT_ENABLED=true
 TWENTY_SYNC_ENABLED=true
 ```
+
+Auth requirements:
+
+- A valid active workspace user is required for UI-driven commit.
+- Allowed roles: `admin`, `operator`, `rep`.
+- Missing or inactive profiles are rejected.
+- The legacy workspace-secret fallback may be used only for explicitly
+  configured staging/server-side compatibility.
 
 Optional persistence:
 
@@ -277,6 +325,11 @@ Response:
         "provider": "twenty"
       }
     ],
+    "workspaceUser": {
+      "authenticated": true,
+      "role": "rep",
+      "roleSource": "profile"
+    },
     "protectedFieldCheck": {
       "ok": true,
       "blockedFields": []

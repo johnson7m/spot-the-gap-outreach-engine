@@ -17,7 +17,8 @@ export async function processQuickCaptureLead({
   operationalStore,
   now = new Date(),
   dryRun = true,
-  persistEvents
+  persistEvents,
+  workspaceUser
 }) {
   const normalizedLead = normalizeQuickCaptureLead(input);
   const schemaResult = await discoverOutboundSchema({
@@ -55,6 +56,7 @@ export async function processQuickCaptureLead({
     scores,
     cadence,
     payloads,
+    workspaceUser,
     now
   });
   let persistedOutboundEvent = null;
@@ -71,6 +73,7 @@ export async function processQuickCaptureLead({
     scores,
     cadence,
     crmPayloads: payloads,
+    workspaceUser: sanitizeWorkspaceUser(workspaceUser),
     outboundEvent: {
       planned: outboundEvent,
       persisted: persistedOutboundEvent
@@ -85,17 +88,20 @@ export async function processQuickCaptureLead({
   };
 }
 
-function buildOutboundEvent({ lead, scores, cadence, payloads, now }) {
+function buildOutboundEvent({ lead, scores, cadence, payloads, workspaceUser, now }) {
+  const sanitizedWorkspaceUser = sanitizeWorkspaceUser(workspaceUser);
+
   return {
     assessmentSubmissionId: null,
     correlationId: `quick-capture:${lead.dedupe.key}`,
     eventType: 'quick_capture_planned',
     channel: cadence.firstTask.channel.toLowerCase(),
     status: 'planned',
-    actorType: 'system',
+    actorType: sanitizedWorkspaceUser?.authenticated ? 'workspace_user' : 'system',
     requiresApproval: true,
     payload: {
       capturedAt: now.toISOString(),
+      workspaceUser: sanitizedWorkspaceUser,
       lead,
       scores,
       cadence,
@@ -106,6 +112,22 @@ function buildOutboundEvent({ lead, scores, cadence, payloads, now }) {
       )
     },
     scheduledFor: cadence.firstTask.dueAt
+  };
+}
+
+function sanitizeWorkspaceUser(workspaceUser) {
+  if (!workspaceUser) {
+    return null;
+  }
+
+  return {
+    authenticated: Boolean(workspaceUser.authenticated),
+    userId: workspaceUser.userId ?? null,
+    email: workspaceUser.email ?? null,
+    fullName: workspaceUser.fullName ?? null,
+    role: workspaceUser.role ?? null,
+    roleSource: workspaceUser.roleSource ?? null,
+    profileId: workspaceUser.profileId ?? null
   };
 }
 

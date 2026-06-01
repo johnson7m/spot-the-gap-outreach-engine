@@ -1,7 +1,10 @@
 import pino from 'pino';
 import { describe, expect, it } from 'vitest';
 import { PROTECTED_ASSESSMENT_FIELDS } from '../src/integrations/twenty/quickCaptureClient.js';
-import { requireWorkspaceSecret } from '../src/middleware/workspaceAuth.js';
+import {
+  createSupabaseWorkspaceAuth,
+  requireWorkspaceAuthOrSecret
+} from '../src/middleware/supabaseWorkspaceAuth.js';
 import {
   handleQuickCaptureCommit,
   handleQuickCapturePreview
@@ -23,7 +26,9 @@ const baseConfig = {
     apiSecret: 'workspace-secret'
   },
   supabase: {
-    enabled: false
+    enabled: false,
+    jwtVerificationEnabled: false,
+    authRequiredForWorkspaceApi: false
   },
   twenty: {
     syncEnabled: false,
@@ -77,6 +82,10 @@ describe('workspace Quick Capture API', () => {
         }
       }
     });
+    expect(response.body.data.workspaceUser).toMatchObject({
+      authenticated: false,
+      roleSource: 'unauthenticated/dev'
+    });
     expect(response.body.data.crmPayloadPreview.person.payload).not.toHaveProperty(
       'assessmentScore'
     );
@@ -104,8 +113,82 @@ describe('workspace Quick Capture API', () => {
     expect(crmCalled).toBe(false);
   });
 
-  it('rejects commit without the workspace secret', async () => {
-    const response = await invokeWorkspaceSecret({
+  it('rejects preview without a bearer token when workspace auth is required', async () => {
+    const response = await invokePreview({
+      config: {
+        ...baseConfig,
+        supabase: {
+          ...baseConfig.supabase,
+          jwtVerificationEnabled: true,
+          authRequiredForWorkspaceApi: true
+        }
+      },
+      body: { lead: sampleLead }
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.body.errors[0].code).toBe('WORKSPACE_AUTH_REQUIRED');
+  });
+
+  it('accepts preview with a valid bearer token and active workspace profile', async () => {
+    const response = await invokePreview({
+      config: authRequiredConfig(),
+      headers: {
+        authorization: 'Bearer valid-token'
+      },
+      supabaseClient: createFakeWorkspaceSupabaseClient({
+        profile: workspaceProfile({ role: 'operator' })
+      }),
+      body: { lead: sampleLead }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body.data.workspaceUser).toMatchObject({
+      authenticated: true,
+      userId: 'workspace-user-1',
+      email: 'rep@visiblegap.com',
+      role: 'operator',
+      roleSource: 'profile'
+    });
+  });
+
+  it('rejects inactive workspace profiles', async () => {
+    const response = await invokePreview({
+      config: authRequiredConfig(),
+      headers: {
+        authorization: 'Bearer valid-token'
+      },
+      supabaseClient: createFakeWorkspaceSupabaseClient({
+        profile: workspaceProfile({ role: 'rep', is_active: false })
+      }),
+      body: { lead: sampleLead }
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.body.errors[0].code).toBe('WORKSPACE_PROFILE_INACTIVE');
+  });
+
+  it.each(['rep', 'operator', 'admin'])(
+    'accepts %s role for Quick Capture preview',
+    async (role) => {
+      const response = await invokePreview({
+        config: authRequiredConfig(),
+        headers: {
+          authorization: 'Bearer valid-token'
+        },
+        supabaseClient: createFakeWorkspaceSupabaseClient({
+          profile: workspaceProfile({ role })
+        }),
+        body: { lead: sampleLead }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.body.data.workspaceUser.role).toBe(role);
+    }
+  );
+
+  it('rejects commit without workspace auth or secret fallback', async () => {
+    const response = await invokeCommit({
       config: {
         ...baseConfig,
         quickCapture: {
@@ -117,7 +200,8 @@ describe('workspace Quick Capture API', () => {
           syncEnabled: true
         }
       },
-      headers: {}
+      headers: {},
+      body: { lead: sampleLead, previewId: 'preview-1' }
     });
 
     expect(response.statusCode).toBe(401);
@@ -225,6 +309,92 @@ describe('workspace Quick Capture API', () => {
     });
   });
 
+  it('commits with an authenticated rep when commit env flags are enabled', async () => {
+    let workflowInput;
+    const response = await invokeCommit({
+      config: {
+        ...authRequiredConfig(),
+        quickCapture: {
+          ...baseConfig.quickCapture,
+          apiCommitEnabled: true
+        },
+        twenty: {
+          ...baseConfig.twenty,
+          syncEnabled: true,
+          apiKey: 'test-key'
+        }
+      },
+      headers: {
+        authorization: 'Bearer valid-token'
+      },
+      supabaseClient: createFakeWorkspaceSupabaseClient({
+        profile: workspaceProfile({ role: 'rep' })
+      }),
+      body: { lead: sampleLead, previewId: 'preview-1' },
+      dependencies: {
+        processQuickCaptureLeadFn: async (input) => {
+          workflowInput = input;
+          return fakeQuickCapturePlan({ workspaceUser: input.workspaceUser });
+        },
+        createCrmAdapterFn: () => ({
+          async syncQuickCaptureLead({ payloads }) {
+            return {
+              provider: 'twenty',
+              status: 'succeeded',
+              dryRun: false,
+              operations: [
+                succeededOperation('company', 'companies-1', payloads.company),
+                succeededOperation('person', 'people-1', payloads.person),
+                succeededOperation('task', 'tasks-1', payloads.task)
+              ],
+              skippedRelationships: []
+            };
+          }
+        })
+      }
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(workflowInput.workspaceUser).toMatchObject({
+      authenticated: true,
+      userId: 'workspace-user-1',
+      role: 'rep',
+      roleSource: 'profile'
+    });
+    expect(response.body.data.workspaceUser).toMatchObject({
+      authenticated: true,
+      role: 'rep',
+      roleSource: 'profile'
+    });
+  });
+
+  it('includes workspace role context in outbound event metadata', async () => {
+    const workspaceUser = {
+      authenticated: true,
+      userId: 'workspace-user-1',
+      email: 'rep@visiblegap.com',
+      fullName: 'Visible Gap Rep',
+      role: 'rep',
+      roleSource: 'profile',
+      profileId: 'profile-1'
+    };
+    const response = await invokePreview({
+      body: { lead: sampleLead },
+      workspaceUser
+    });
+
+    expect(response.body.data.outboundEventPreview).toMatchObject({
+      actorType: 'workspace_user',
+      payload: {
+        workspaceUser: {
+          userId: 'workspace-user-1',
+          role: 'rep',
+          roleSource: 'profile'
+        }
+      }
+    });
+  });
+
   it('returns validation errors for malformed Quick Capture payloads', async () => {
     const response = await invokePreview({
       body: { lead: { fullName: 'Taylor Morgan', leadSource: 'LINKEDIN' } }
@@ -262,8 +432,35 @@ describe('workspace Quick Capture API', () => {
   });
 });
 
-async function invokePreview({ body, config = baseConfig, dependencies = {} } = {}) {
-  const { req, res, next } = createMockExchange({ body, config });
+async function invokePreview({
+  body,
+  headers = {},
+  config = baseConfig,
+  dependencies = {},
+  supabaseClient,
+  workspaceUser
+} = {}) {
+  const { req, res, next } = createMockExchange({ body, headers, config });
+  if (workspaceUser) {
+    req.workspaceUser = workspaceUser;
+  } else {
+    const auth = createSupabaseWorkspaceAuth({
+      config,
+      log: silentLogger,
+      required: Boolean(config.supabase?.authRequiredForWorkspaceApi),
+      allowedRoles: ['admin', 'operator', 'rep'],
+      supabaseClient
+    });
+    let authenticated = false;
+
+    await auth(req, res, () => {
+      authenticated = true;
+    });
+
+    if (!authenticated) {
+      return res;
+    }
+  }
 
   await handleQuickCapturePreview(req, res, next, {
     config,
@@ -282,13 +479,19 @@ async function invokeCommit({
   body,
   headers = {},
   config = baseConfig,
-  dependencies = {}
+  dependencies = {},
+  supabaseClient
 } = {}) {
   const { req, res, next } = createMockExchange({ body, headers, config });
-  const auth = requireWorkspaceSecret({ config, log: silentLogger });
+  const auth = requireWorkspaceAuthOrSecret({
+    config,
+    log: silentLogger,
+    allowedRoles: ['admin', 'operator', 'rep'],
+    supabaseClient
+  });
   let authenticated = false;
 
-  auth(req, res, () => {
+  await auth(req, res, () => {
     authenticated = true;
   });
 
@@ -299,19 +502,6 @@ async function invokeCommit({
       ...dependencies
     });
   }
-
-  if (res.error) {
-    throw res.error;
-  }
-
-  return res;
-}
-
-async function invokeWorkspaceSecret({ headers = {}, config = baseConfig } = {}) {
-  const { req, res, next } = createMockExchange({ body: {}, headers, config });
-  const auth = requireWorkspaceSecret({ config, log: silentLogger });
-
-  auth(req, res, next);
 
   if (res.error) {
     throw res.error;
@@ -347,7 +537,18 @@ function createMockExchange({ body = {}, headers = {}, config }) {
   return { req, res, next, config };
 }
 
-function fakeQuickCapturePlan() {
+function authRequiredConfig() {
+  return {
+    ...baseConfig,
+    supabase: {
+      ...baseConfig.supabase,
+      jwtVerificationEnabled: true,
+      authRequiredForWorkspaceApi: true
+    }
+  };
+}
+
+function fakeQuickCapturePlan({ workspaceUser } = {}) {
   return {
     status: 'planned',
     dryRun: false,
@@ -410,10 +611,15 @@ function fakeQuickCapturePlan() {
     outboundEvent: {
       planned: {
         correlationId: `quick-capture:person:email:${sampleLead.email}`,
+        actorType: workspaceUser?.authenticated ? 'workspace_user' : 'system',
+        payload: {
+          workspaceUser: workspaceUser ?? null
+        },
         status: 'planned'
       },
       persisted: null
     },
+    workspaceUser,
     schemaValidation: {
       ok: true,
       warnings: [],
@@ -435,5 +641,67 @@ function succeededOperation(object, id, operation) {
     },
     attempts: 1,
     retryCount: 0
+  };
+}
+
+function workspaceProfile({ role = 'rep', is_active = true } = {}) {
+  return {
+    id: 'profile-1',
+    user_id: 'workspace-user-1',
+    email: 'rep@visiblegap.com',
+    full_name: 'Visible Gap Rep',
+    role,
+    is_active,
+    created_at: '2026-06-01T00:00:00.000Z',
+    updated_at: '2026-06-01T00:00:00.000Z'
+  };
+}
+
+function createFakeWorkspaceSupabaseClient({ profile, token = 'valid-token' } = {}) {
+  return {
+    auth: {
+      async getUser(providedToken) {
+        if (providedToken !== token) {
+          return {
+            data: {
+              user: null
+            },
+            error: {
+              message: 'invalid token'
+            }
+          };
+        }
+
+        return {
+          data: {
+            user: {
+              id: 'workspace-user-1',
+              email: 'rep@visiblegap.com'
+            }
+          },
+          error: null
+        };
+      }
+    },
+    from(tableName) {
+      expect(tableName).toBe('workspace_profiles');
+
+      return {
+        select() {
+          return this;
+        },
+        eq(column, value) {
+          expect(column).toBe('user_id');
+          expect(value).toBe('workspace-user-1');
+          return this;
+        },
+        async maybeSingle() {
+          return {
+            data: profile ?? null,
+            error: null
+          };
+        }
+      };
+    }
   };
 }

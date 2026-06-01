@@ -29,6 +29,8 @@ const envSchema = z.object({
   SUPABASE_ENABLED: booleanFromEnv.default(false),
   SUPABASE_URL: z.string().url().optional().or(z.literal('')),
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
+  SUPABASE_JWT_VERIFICATION_ENABLED: booleanFromEnv.default(false),
+  SUPABASE_AUTH_REQUIRED_FOR_WORKSPACE_API: booleanFromEnv.default(false),
   TWENTY_SYNC_ENABLED: booleanFromEnv.default(false),
   QUICK_CAPTURE_SYNC_ENABLED: booleanFromEnv.default(false),
   QUICK_CAPTURE_API_COMMIT_ENABLED: booleanFromEnv.default(false),
@@ -79,7 +81,9 @@ export function loadConfig() {
     supabase: {
       enabled: parsed.data.SUPABASE_ENABLED,
       url: parsed.data.SUPABASE_URL || undefined,
-      serviceRoleKey: parsed.data.SUPABASE_SERVICE_ROLE_KEY
+      serviceRoleKey: parsed.data.SUPABASE_SERVICE_ROLE_KEY,
+      jwtVerificationEnabled: parsed.data.SUPABASE_JWT_VERIFICATION_ENABLED,
+      authRequiredForWorkspaceApi: parsed.data.SUPABASE_AUTH_REQUIRED_FOR_WORKSPACE_API
     },
     twenty: {
       syncEnabled: parsed.data.TWENTY_SYNC_ENABLED,
