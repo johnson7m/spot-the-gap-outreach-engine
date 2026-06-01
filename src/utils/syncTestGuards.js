@@ -55,6 +55,69 @@ export function evaluateSyncTestMode({
   };
 }
 
+export function evaluateQuickCaptureSyncTestMode({
+  liveTest,
+  quickCaptureSyncEnabled,
+  twentySyncEnabled,
+  twentyApiKey,
+  supabaseEnabled,
+  supabaseUrl,
+  supabaseServiceRoleKey
+}) {
+  const errors = [];
+  const warnings = [];
+  const liveRequested = toBoolean(liveTest);
+  const quickCaptureEnabled = toBoolean(quickCaptureSyncEnabled);
+  const twentyEnabled = toBoolean(twentySyncEnabled);
+  const anyLiveFlagEnabled = liveRequested || quickCaptureEnabled || twentyEnabled;
+
+  if (!anyLiveFlagEnabled) {
+    return {
+      mode: 'dry_run',
+      ok: true,
+      errors,
+      warnings: [
+        'Quick Capture live writes are disabled. Set QUICK_CAPTURE_SYNC_ENABLED=true, TWENTY_SYNC_ENABLED=true, and LIVE_TEST=true for one controlled live test.'
+      ]
+    };
+  }
+
+  if (!liveRequested) {
+    errors.push('Quick Capture live test requires LIVE_TEST=true.');
+  }
+
+  if (!quickCaptureEnabled) {
+    errors.push('Quick Capture live test requires QUICK_CAPTURE_SYNC_ENABLED=true.');
+  }
+
+  if (!twentyEnabled) {
+    errors.push('Quick Capture live test requires TWENTY_SYNC_ENABLED=true.');
+  }
+
+  if (!twentyApiKey) {
+    errors.push('Quick Capture live test requires TWENTY_API_KEY.');
+  }
+
+  if (!toBoolean(supabaseEnabled)) {
+    warnings.push('SUPABASE_ENABLED is false. Live CRM writes can run, but no outbound event will be persisted.');
+  } else {
+    if (!supabaseUrl) {
+      errors.push('SUPABASE_ENABLED=true requires SUPABASE_URL.');
+    }
+
+    if (!supabaseServiceRoleKey) {
+      errors.push('SUPABASE_ENABLED=true requires SUPABASE_SERVICE_ROLE_KEY.');
+    }
+  }
+
+  return {
+    mode: errors.length === 0 ? 'live' : 'blocked',
+    ok: errors.length === 0,
+    errors,
+    warnings
+  };
+}
+
 export function toBoolean(value) {
   if (typeof value === 'boolean') {
     return value;

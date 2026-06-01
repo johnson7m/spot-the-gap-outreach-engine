@@ -2,7 +2,10 @@ import { createClient } from '@supabase/supabase-js';
 import { loadConfig } from '../src/config/env.js';
 import { createTwentyMetadataClient } from '../src/integrations/twenty/metadataClient.js';
 import { validateTwentyRelationships } from '../src/integrations/twenty/relationshipValidator.js';
-import { validateTwentySchema } from '../src/integrations/twenty/schemaValidator.js';
+import {
+  validateTwentyOutboundSchema,
+  validateTwentySchema
+} from '../src/integrations/twenty/schemaValidator.js';
 
 const REQUIRED_TABLES = [
   'assessment_submissions',
@@ -122,11 +125,14 @@ async function validateTwenty(config) {
   const metadataClient = createTwentyMetadataClient(config.twenty);
   const schema = await metadataClient.discoverSchema();
   const schemaValidation = validateTwentySchema(schema);
+  const outboundSchemaValidation = validateTwentyOutboundSchema(schema);
   const relationshipValidation = validateTwentyRelationships(schema);
   const leadstageAuto = schemaValidation.objects.person?.fields.leadstageAuto;
   const leadstageValues = leadstageAuto?.options ?? [];
   const warnings = [
     ...schemaValidation.warnings,
+    ...outboundSchemaValidation.warnings,
+    ...outboundSchemaValidation.errors.map((error) => `Outbound schema warning: ${error}`),
     ...relationshipValidation.warnings
   ];
   const blockers = [
@@ -149,6 +155,7 @@ async function validateTwenty(config) {
     blockers,
     warnings,
     objects: Object.keys(schemaValidation.objects),
+    outboundObjects: Object.keys(outboundSchemaValidation.objects),
     relationships: relationshipValidation.mappings
   };
 }

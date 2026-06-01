@@ -76,6 +76,60 @@ export const twentySchemaExpectations = {
   }
 };
 
+export const twentyOutboundSchemaExpectations = {
+  person: {
+    fields: {
+      outboundPipelineType: {
+        type: 'SELECT',
+        options: ['ASSESSMENT_CAMPAIGN', 'RELATIONSHIP_BUILDING', 'GENERAL_PROSPECT']
+      },
+      cadenceName: {
+        type: 'SELECT',
+        options: ['ASSESSMENT_CAMPAIGN_V1', 'RELATIONSHIP_BUILDING_V1', 'NONE']
+      },
+      cadenceStage: {
+        type: 'SELECT',
+        options: [
+          'NOT_STARTED',
+          'CONNECTION_REQUEST',
+          'INTRO_MESSAGE',
+          'ASSESSMENT_POSITIONING',
+          'ASSESSMENT_SENT',
+          'ASSESSMENT_CHECK_IN',
+          'VALUE_TOUCH',
+          'STRATEGIC_CHECK_IN',
+          'DISCOVERY_ASK',
+          'PAUSED',
+          'COMPLETED'
+        ]
+      },
+      enrichmentStatus: {
+        type: 'SELECT',
+        options: ['NOT_STARTED', 'PARTIAL', 'ENRICHED', 'NEEDS_REVIEW', 'FAILED']
+      },
+      icpFitScore: { type: 'NUMBER' },
+      leadHealthScore: { type: 'NUMBER' },
+      lastOutboundTouchDate: { type: 'DATE' },
+      nextOutboundTouchDate: { type: 'DATE' },
+      outreachAngle: { type: 'TEXT' },
+      latestTouchChannel: {
+        type: 'SELECT',
+        options: ['LINKEDIN', 'EMAIL', 'PHONE', 'TEXT', 'IN_PERSON', 'OTHER']
+      },
+      latestTouchStatus: {
+        type: 'SELECT',
+        options: ['DRAFTED', 'SENT', 'RESPONDED', 'NO_RESPONSE', 'BOUNCED', 'DECLINED', 'COMPLETED']
+      },
+      quickCaptureUrl: { type: 'LINKS' },
+      staleRisk: { type: 'SELECT', options: ['LOW', 'MEDIUM', 'HIGH', 'STALE'] },
+      discoveryReadiness: {
+        type: 'SELECT',
+        options: ['NOT_READY', 'MONITOR', 'READY', 'REQUESTED', 'BOOKED']
+      }
+    }
+  }
+};
+
 export function validateTwentySchema(schema, expectations = twentySchemaExpectations) {
   const errors = [];
   const warnings = [];
@@ -131,6 +185,87 @@ export function validateTwentySchema(schema, expectations = twentySchemaExpectat
           if (!fieldExpectation.options.includes(actualOption)) {
             warnings.push(
               `Field "${objectName}.${fieldName}" has extra select option "${actualOption}".`
+            );
+          }
+        }
+      }
+    }
+  }
+
+  return {
+    ok: errors.length === 0,
+    errors,
+    warnings,
+    objects
+  };
+}
+
+export function validateTwentyOutboundSchema(
+  schema,
+  expectations = twentyOutboundSchemaExpectations
+) {
+  const errors = [];
+  const warnings = [];
+  const objects = {};
+
+  for (const [objectName, expectation] of Object.entries(expectations)) {
+    const objectMetadata = findObject(schema, objectName);
+
+    if (!objectMetadata) {
+      errors.push(`Missing Twenty object metadata for outbound "${objectName}".`);
+      continue;
+    }
+
+    objects[objectName] = {
+      nameSingular: objectMetadata.nameSingular,
+      namePlural: objectMetadata.namePlural,
+      fields: {}
+    };
+
+    for (const [fieldName, fieldExpectation] of Object.entries(expectation.fields)) {
+      const field = findField(objectMetadata, fieldName);
+
+      if (!field) {
+        const message = `Missing outbound field "${objectName}.${fieldName}".`;
+
+        if (fieldExpectation.optional) {
+          warnings.push(message);
+        } else {
+          errors.push(message);
+        }
+
+        continue;
+      }
+
+      objects[objectName].fields[fieldName] = {
+        apiName: field.name,
+        label: field.label,
+        type: field.type,
+        isCustom: field.isCustom,
+        options: optionValues(field)
+      };
+
+      if (field.type !== fieldExpectation.type) {
+        errors.push(
+          `Outbound field "${objectName}.${fieldName}" expected type ${fieldExpectation.type}, received ${field.type}.`
+        );
+      }
+
+      if (fieldExpectation.options) {
+        const actualOptions = new Set(optionValues(field));
+
+        for (const expectedOption of fieldExpectation.options) {
+          if (!actualOptions.has(expectedOption)) {
+            errors.push(
+              `Outbound field "${objectName}.${fieldName}" is missing select option "${expectedOption}".`
+            );
+          }
+        }
+
+        for (const actualOption of actualOptions) {
+          if (!fieldExpectation.options.includes(actualOption)) {
+            warnings.push(
+              `Outbound field "${objectName}.${fieldName}" has extra select option "${actualOption}".`
             );
           }
         }

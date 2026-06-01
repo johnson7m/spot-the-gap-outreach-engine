@@ -106,6 +106,11 @@ create index if not exists idx_crm_sync_logs_provider_object
   on crm_sync_logs (provider, object_name, status);
 
 create table if not exists outbound_events (
+  -- Quick Capture MVP can use event_type='quick_capture_planned' with the
+  -- captured lead, scores, cadence, and CRM dedupe keys in payload. No separate
+  -- quick_capture_events table is required for the initial backend foundation.
+  -- Controlled live Quick Capture tests can also write CRM operation audit rows
+  -- to crm_sync_logs with assessment_submission_id and workflow_job_id set null.
   id uuid primary key default gen_random_uuid(),
   assessment_submission_id uuid references assessment_submissions(id) on delete set null,
   correlation_id text not null,

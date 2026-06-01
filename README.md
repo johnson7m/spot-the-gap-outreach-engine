@@ -19,6 +19,10 @@ This project is intentionally separate from the production website. The website 
 The system is organized around clear boundaries:
 
 - `src/server.js`: Express app, health route, webhook route, and error handling.
+- `src/routes/api/`: internal workspace API routes such as Quick Capture
+  preview/commit.
+- `src/middleware/`: API middleware such as temporary workspace shared-secret
+  validation.
 - `src/config/`: environment loading, validation, and logging.
 - `src/integrations/netlifyWebhook.js`: Netlify assessment webhook normalization.
 - `src/integrations/crm/`: provider-neutral CRM adapter boundary.
@@ -53,6 +57,48 @@ Health check:
 curl http://localhost:3000/health
 ```
 
+Quick Capture dry run:
+
+```bash
+npm run quick-capture:dry
+```
+
+The dry run never writes to Twenty. To also persist the planned
+`outbound_events` row in a configured Supabase environment, run with
+`QUICK_CAPTURE_PERSIST_EVENTS=true`.
+
+Controlled Quick Capture live test:
+
+```bash
+QUICK_CAPTURE_SYNC_ENABLED=true TWENTY_SYNC_ENABLED=true LIVE_TEST=true npm run quick-capture:live
+```
+
+The live script validates that the sample lead is obviously fake/test data,
+prints planned payloads before execution, writes through the CRM adapter, and
+leaves protected assessment fields untouched.
+
+Workspace Quick Capture API:
+
+```text
+POST /api/quick-capture/preview
+POST /api/quick-capture/commit
+```
+
+Preview is dry-run only and is intended for the internal
+`visible-gap-workspace` review screen. Commit is disabled by default and
+requires:
+
+```bash
+QUICK_CAPTURE_API_COMMIT_ENABLED=true
+TWENTY_SYNC_ENABLED=true
+WORKSPACE_API_SECRET=<temporary-workspace-secret>
+```
+
+Commit requests must include
+`x-visible-gap-workspace-secret: <WORKSPACE_API_SECRET>`. Set
+`WORKSPACE_ALLOWED_ORIGIN` to the deployed workspace origin when browser CORS
+needs to allow the internal app.
+
 Webhook endpoint:
 
 ```text
@@ -77,11 +123,40 @@ assessmentWorkflow
       -> twentyProvider
 ```
 
+Future internal workspace:
+
+```text
+visible-gap-workspace
+  -> outreach engine API
+      -> Supabase operational store
+      -> CRM adapter
+      -> Twenty provider
+```
+
+The future `visible-gap-workspace` repo should be a separately deployed internal
+React/Vite app for Quick Capture, rep queues, reporting, and operator recovery.
+It should call this engine through authenticated API endpoints and should never
+write directly to Twenty or Supabase from the browser.
+
 Useful docs:
 
 - `docs/assessment-schema.md`
 - `docs/crm-field-map.md`
 - `docs/twenty-integration-plan.md`
+- `docs/outbound-operations-architecture.md`
+- `docs/quick-capture-blueprint.md`
+- `docs/internal-workspace-architecture.md`
+- `docs/workspace-api-contract.md`
+- `docs/quick-capture-ui-spec.md`
+- `docs/rep-queue-ui-spec.md`
+- `docs/operator-recovery-ui-spec.md`
+- `docs/outbound-state-machine.md`
+- `docs/duplicate-resolution-blueprint.md`
+- `docs/lead-health-scoring-spec.md`
+- `docs/crm-schema-gap-analysis.md`
+- `docs/cadence-engine-blueprint.md`
+- `docs/rep-queue-blueprint.md`
+- `docs/reporting-blueprint.md`
 
 ## Roadmap
 

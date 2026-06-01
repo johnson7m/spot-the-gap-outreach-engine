@@ -1,0 +1,15 @@
+{
+  "firstName": "Taylor",
+  "lastName": "Morgan",
+  "fullName": "Taylor Morgan",
+  "title": "VP of Operations",
+  "companyName": "Visible Gap Quick Capture Test Company",
+  "companyWebsite": "https://quickcapture-test.example.com",
+  "linkedinUrl": "https://www.linkedin.com/in/visiblegap-quick-capture-test",
+  "email": "visiblegap.quick-capture-test@example.com",
+  "phone": "+1 555 010 0142",
+  "leadSource": "LINKEDIN_MANUAL_CAPTURE",
+  "outboundPipelineType": "ASSESSMENT_CAMPAIGN",
+  "notes": "Manual test capture for a staffing operations leader interested in reporting reliability, ATS/VMS cleanup, and scaling control.",
+  "assignedRep": "Visible Gap Test Rep"
+}

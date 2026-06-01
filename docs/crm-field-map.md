@@ -1,6 +1,6 @@
 # CRM Field Map
 
-This map reflects the current Twenty metadata discovery pass and the assessment schema found in the production website. Live writes remain disabled until idempotency, audit logging, and permission boundaries are implemented.
+This map reflects the current Twenty metadata discovery pass and the assessment schema found in the production website. Controlled live assessment sync is available behind environment gates, idempotency checks, audit logging, and the CRM adapter boundary.
 
 ## Twenty Metadata Discovery Result
 
@@ -11,12 +11,10 @@ Read-only metadata discovery confirmed these core objects:
 - `task` / `tasks`
 - `opportunity` / `opportunities`
 
-Important schema inconsistency:
+Current schema note:
 
-- Requested People select value: `DISQUALIFIED_NURTURE`
-- Discovered People select value: `DISQUALIFIED_NUTURE`
-
-The schema validator treats this as an error because the field value is likely a typo and would break code expecting the intended spelling.
+- People `leadstageAuto` now includes the corrected value `DISQUALIFIED_NURTURE`.
+- The prior typo value `DISQUALIFIED_NUTURE` was not present in the 2026-05-27 metadata inspection.
 
 ## People
 
@@ -34,6 +32,32 @@ The schema validator treats this as an error because the field value is likely a
 | follow-up date | `nextFollowUpDate` | `DATE` | Yes | Custom field. Based on assessment priority. |
 | company link | `company` | `RELATION` | Future | Requires Company ID after upsert. |
 
+### People Outbound Fields
+
+Read-only metadata discovery on 2026-05-27 confirmed these People fields for
+Quick Capture and future outbound workflows:
+
+| Field API Name | Type | Values / Notes |
+| --- | --- | --- |
+| `outboundPipelineType` | `SELECT` | `ASSESSMENT_CAMPAIGN`, `RELATIONSHIP_BUILDING`, `GENERAL_PROSPECT` |
+| `cadenceName` | `SELECT` | `ASSESSMENT_CAMPAIGN_V1`, `RELATIONSHIP_BUILDING_V1`, `NONE` |
+| `cadenceStage` | `SELECT` | `NOT_STARTED`, `CONNECTION_REQUEST`, `INTRO_MESSAGE`, `ASSESSMENT_POSITIONING`, `ASSESSMENT_SENT`, `ASSESSMENT_CHECK_IN`, `VALUE_TOUCH`, `STRATEGIC_CHECK_IN`, `DISCOVERY_ASK`, `PAUSED`, `COMPLETED` |
+| `enrichmentStatus` | `SELECT` | `NOT_STARTED`, `PARTIAL`, `ENRICHED`, `NEEDS_REVIEW`, `FAILED` |
+| `icpFitScore` | `NUMBER` | Preliminary 0-100 score. |
+| `leadHealthScore` | `NUMBER` | Preliminary 0-100 score. |
+| `lastOutboundTouchDate` | `DATE` | Outbound-specific date. Do not overload `lastTouchDate`. |
+| `nextOutboundTouchDate` | `DATE` | Outbound-specific date. Do not overload `nextFollowUpDate`. |
+| `outreachAngle` | `TEXT` | Outbound-specific angle. Do not overload assessment `messageAngle`. |
+| `latestTouchChannel` | `SELECT` | `LINKEDIN`, `EMAIL`, `PHONE`, `TEXT`, `IN_PERSON`, `OTHER` |
+| `latestTouchStatus` | `SELECT` | `DRAFTED`, `SENT`, `RESPONDED`, `NO_RESPONSE`, `BOUNCED`, `DECLINED`, `COMPLETED` |
+| `quickCaptureUrl` | `LINKS` | User-provided source/profile URL. |
+| `staleRisk` | `SELECT` | `LOW`, `MEDIUM`, `HIGH`, `STALE` |
+| `discoveryReadiness` | `SELECT` | `NOT_READY`, `MONITOR`, `READY`, `REQUESTED`, `BOOKED` |
+
+All expected People outbound fields were found with the expected camelCase API
+names. User-provided LinkedIn URLs are stored in both standard `linkedinLink`
+and outbound `quickCaptureUrl` when metadata confirms the field is available.
+
 ### People `leadstageAuto` Values
 
 Expected values:
@@ -49,7 +73,7 @@ Expected values:
 - `DISCOVERY_REQUESTED`
 - `DISQUALIFIED_NURTURE`
 
-Discovered values currently include `DISQUALIFIED_NUTURE` instead of `DISQUALIFIED_NURTURE`.
+The corrected `DISQUALIFIED_NURTURE` value was confirmed in metadata on 2026-05-27.
 
 ## Companies
 
@@ -151,7 +175,7 @@ assessmentWorkflow
           -> object clients
 ```
 
-Dry-run sync currently:
+Assessment sync:
 
 1. Normalizes the Netlify payload.
 2. Recalculates assessment score from `answerSummary`.
@@ -159,12 +183,31 @@ Dry-run sync currently:
 4. Discovers and validates Twenty schema when an API key is configured.
 5. Returns planned operations without writing records.
 
-Live sync still needs:
+Future CRM expansion still needs:
 
-- Idempotency storage.
-- Duplicate lookup before upsert.
 - Relationship resolution after Person/Company writes.
-- Audit logging.
-- Retry policy.
-- Rate limits.
 - Scoped API keys and service permissions.
+- Native relationship write confirmation for task, person, and opportunity links.
+- Outbound-specific fields after approval.
+
+## Quick Capture Dry-Run Payloads
+
+Quick Capture planning is intentionally separate from the assessment sync. The
+dry-run script builds:
+
+- Person upsert payload with outbound fields when metadata confirms support.
+- Company upsert payload when `companyName` is provided.
+- Task create payload for the first manual cadence action.
+- Supabase `outbound_events` plan when event persistence is enabled.
+
+Twenty writes are not performed by `npm run quick-capture:dry`.
+
+Controlled live Quick Capture writes require:
+
+- `QUICK_CAPTURE_SYNC_ENABLED=true`
+- `TWENTY_SYNC_ENABLED=true`
+- `LIVE_TEST=true`
+
+The live test path may create/update Person and Company records and create or
+skip a first Task. It does not write protected assessment fields and does not
+write unresolved relationships.

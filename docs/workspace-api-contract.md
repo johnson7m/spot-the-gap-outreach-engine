@@ -1,0 +1,642 @@
+# Workspace API Contract
+
+This document defines the API surface the `visible-gap-workspace` should use.
+The Quick Capture preview and commit endpoints are implemented. The remaining
+queue, task, duplicate, recovery, and reporting endpoints are still planned.
+
+The workspace should call the outreach engine only. The browser should not call
+Twenty or Supabase directly.
+
+## API Principles
+
+- Dry-run and preview modes should be available before live writes.
+- All write endpoints should be authenticated and audit logged.
+- Every response should include a `correlationId`.
+- Validation warnings should be separate from blocking errors.
+- CRM writes must continue routing through `crmAdapter`.
+- Recovery endpoints must retry only targeted failed operations.
+- Protected assessment fields must not be writable through Quick Capture.
+- Quick Capture is preview-first: users review payloads, task, cadence plan, and
+  dedupe warnings before commit.
+- Task completion may generate exactly one next task according to cadence stage.
+
+## Common Headers
+
+Common request headers:
+
+```text
+Authorization: Bearer <workspace-session-token>
+X-Visible-Gap-Workspace: visible-gap-workspace
+X-Visible-Gap-Workspace-Secret: <temporary-shared-secret-for-commit>
+X-Correlation-Id: <optional-client-generated-id>
+Content-Type: application/json
+```
+
+Authentication is planned around Supabase Auth. `Authorization` should carry the
+Supabase Auth access token. The outreach engine should validate that token and
+authorize actions by role:
+
+- `admin`
+- `rep`
+- `operator`
+
+Current staging commit protection uses the temporary
+`x-visible-gap-workspace-secret` header. This shared-secret gate should be
+replaced by Supabase Auth token validation before broader production use.
+
+## Common Response Envelope
+
+```json
+{
+  "ok": true,
+  "correlationId": "workspace:...",
+  "data": {},
+  "warnings": [],
+  "errors": []
+}
+```
+
+For failed requests:
+
+```json
+{
+  "ok": false,
+  "correlationId": "workspace:...",
+  "data": null,
+  "warnings": [],
+  "errors": [
+    {
+      "code": "VALIDATION_ERROR",
+      "message": "companyName is required.",
+      "field": "companyName"
+    }
+  ]
+}
+```
+
+## Endpoint Index
+
+Implemented endpoints:
+
+- `POST /api/quick-capture/preview`
+- `POST /api/quick-capture/commit`
+
+Planned endpoints:
+
+- `GET /api/duplicates`
+- `POST /api/duplicates/:id/merge`
+- `POST /api/tasks/:id/complete`
+- `POST /api/tasks/:id/pause`
+- `POST /api/tasks/:id/resume`
+- `GET /api/queues/fresh-leads`
+- `GET /api/queues/follow-ups`
+- `GET /api/queues/warm-assessments`
+- `GET /api/queues/stale-recovery`
+- `GET /api/queues/pipeline-review`
+- `GET /api/recovery/retryable-failures`
+- `POST /api/recovery/:id/retry`
+
+## Lead Source Values
+
+Approved `leadSource` values:
+
+- `LINKEDIN`
+- `EVENT`
+- `DROP_IN`
+- `REFERRAL`
+- `ASSESSMENT`
+- `WEBSITE`
+- `EMAIL`
+- `PHONE`
+- `MANUAL`
+- `OTHER`
+
+## Role Requirements
+
+| Endpoint family | Roles |
+| --- | --- |
+| Quick Capture preview | `admin`, `rep`, `operator` |
+| Quick Capture commit | `admin`, `rep`, `operator` |
+| Duplicate merge | `admin`, `rep`, `operator` |
+| Queue reads | `admin`, `rep`, `operator` |
+| Task complete/pause/resume | `admin`, `rep`, `operator` |
+| Recovery reads/retries | `admin`, `operator` |
+
+## POST /api/quick-capture/preview
+
+Normalizes a lead, validates data, detects duplicates, generates lead-health
+score, builds CRM payloads, plans cadence, and returns the first task. It does
+not write to Twenty or Supabase. This endpoint is safe for the staging workspace
+UI and does not require live CRM flags.
+
+Environment guard:
+
+```bash
+QUICK_CAPTURE_API_PREVIEW_ENABLED=true
+```
+
+Request:
+
+```json
+{
+  "lead": {
+    "firstName": "Taylor",
+    "lastName": "Morgan",
+    "fullName": "Taylor Morgan",
+    "title": "VP of Operations",
+    "companyName": "Visible Gap Test Company",
+    "companyWebsite": "https://example.com",
+    "linkedinUrl": "https://www.linkedin.com/in/example-test",
+    "email": "taylor@example.com",
+    "phone": "+1 555 010 0142",
+    "leadSource": "LINKEDIN",
+    "outboundPipelineType": "ASSESSMENT_CAMPAIGN",
+    "notes": "Manual capture context.",
+    "assignedRep": "workspace-user-id"
+  }
+}
+```
+
+The endpoint also accepts the lead fields at the request body root for early UI
+integration, but the preferred shape is `{ "lead": { ... } }`.
+
+Response:
+
+```json
+{
+  "ok": true,
+  "correlationId": "quick-capture:person:email:taylor@example.com",
+  "data": {
+    "status": "preview",
+    "dryRun": true,
+    "normalizedLead": {},
+    "dedupePlan": {
+      "primaryKey": "person:email:taylor@example.com",
+      "strategy": "email",
+      "warnings": []
+    },
+    "crmPayloadPreview": {
+      "person": {},
+      "company": {},
+      "task": {}
+    },
+    "firstTaskPreview": {},
+    "cadencePlan": {
+      "cadenceName": "ASSESSMENT_CAMPAIGN_V1",
+      "cadenceStage": "CONNECTION_REQUEST"
+    },
+    "schemaValidation": {},
+    "protectedFieldCheck": {
+      "ok": true,
+      "blockedFields": []
+    },
+    "outboundEventPreview": {},
+    "skippedRelationships": [],
+    "warnings": []
+  },
+  "warnings": [],
+  "errors": []
+}
+```
+
+Preview responses can include non-blocking warnings for missing optional dedupe
+keys, unresolved relationship mappings, or schema metadata that could not be
+validated locally.
+
+## POST /api/quick-capture/commit
+
+Commits a reviewed Quick Capture lead through the outreach engine workflow and
+CRM adapter. The endpoint accepts the same preferred payload shape as preview:
+`{ "lead": { ... }, "approval": { ... } }`.
+
+Required headers:
+
+```text
+x-visible-gap-workspace-secret: <WORKSPACE_API_SECRET>
+```
+
+Required environment guards:
+
+```bash
+QUICK_CAPTURE_API_COMMIT_ENABLED=true
+TWENTY_SYNC_ENABLED=true
+```
+
+Optional persistence:
+
+```bash
+SUPABASE_ENABLED=true
+```
+
+If any guard is missing, the endpoint returns a structured error and does not
+write to Twenty. Commit always excludes protected assessment fields.
+
+Request:
+
+```json
+{
+  "lead": {
+    "firstName": "Taylor",
+    "lastName": "Morgan",
+    "companyName": "Visible Gap Test Company",
+    "email": "taylor@example.com",
+    "leadSource": "LINKEDIN",
+    "outboundPipelineType": "ASSESSMENT_CAMPAIGN",
+    "notes": "Manual capture context."
+  },
+  "approval": {
+    "approvedBy": "workspace-user-id",
+    "previewReviewed": true
+  }
+}
+```
+
+Response:
+
+```json
+{
+  "ok": true,
+  "correlationId": "quick-capture:person:email:taylor@example.com",
+  "data": {
+    "status": "succeeded",
+    "outboundEventId": "supabase-event-id",
+    "crmResults": [
+      {
+        "object": "person",
+        "action": "update",
+        "status": "succeeded",
+        "id": "twenty-person-id",
+        "duplicateAvoided": true,
+        "matchedBy": "email"
+      }
+    ],
+    "auditLogs": [
+      {
+        "operation": "quick_capture_person_upsert",
+        "status": "succeeded",
+        "provider": "twenty"
+      }
+    ],
+    "protectedFieldCheck": {
+      "ok": true,
+      "blockedFields": []
+    },
+    "skippedRelationships": []
+  },
+  "warnings": [],
+  "errors": []
+}
+```
+
+Protected assessment fields must remain excluded from Quick Capture payloads.
+
+## GET /api/duplicates
+
+Returns potential duplicate People or Companies needing a merge decision.
+
+Query params:
+
+```text
+?object=person&confidence=medium&assignedRep=<id>&limit=50
+```
+
+Response item:
+
+```json
+{
+  "id": "duplicate-candidate-id",
+  "object": "person",
+  "confidence": "medium",
+  "candidateA": {
+    "id": "twenty-person-id-1",
+    "displayName": "Taylor Morgan"
+  },
+  "candidateB": {
+    "id": "twenty-person-id-2",
+    "displayName": "Taylor Morgan"
+  },
+  "matchedBy": ["firstName", "lastName", "company"],
+  "conflicts": ["email", "title"],
+  "missingFieldsToCopy": ["linkedinUrl"],
+  "suggestedAction": "Review merge direction."
+}
+```
+
+## POST /api/duplicates/:id/merge
+
+Executes a user-approved merge decision.
+
+Request:
+
+```json
+{
+  "survivingRecordId": "twenty-person-id-1",
+  "losingRecordId": "twenty-person-id-2",
+  "fieldChoices": {
+    "email": "keep_surviving",
+    "title": "overwrite_from_losing",
+    "linkedinUrl": "copy_missing"
+  },
+  "reason": "Same person confirmed by rep."
+}
+```
+
+Allowed actions:
+
+- merge lead 1 into lead 2
+- merge lead 2 into lead 1
+- keep separate
+
+The backend should copy missing fields into the selected surviving record and
+require explicit keep/overwrite choices for conflicts.
+
+## GET /api/queues/fresh-leads
+
+Returns manually captured leads needing first touch.
+
+Query params:
+
+```text
+?limit=50&cursor=<cursor>&assignedRep=<id>&pipelineType=ASSESSMENT_CAMPAIGN
+```
+
+Queue criteria draft:
+
+- Quick Capture event exists.
+- Person has `cadenceStage=CONNECTION_REQUEST` or `NOT_STARTED`.
+- First-touch task is open.
+- `latestTouchStatus=DRAFTED` or missing.
+
+Response item:
+
+```json
+{
+  "id": "queue-item-id",
+  "personId": "twenty-person-id",
+  "companyId": "twenty-company-id",
+  "taskId": "twenty-task-id",
+  "person": "Taylor Morgan",
+  "title": "VP of Operations",
+  "company": "Example Co",
+  "pipelineType": "ASSESSMENT_CAMPAIGN",
+  "cadenceStage": "CONNECTION_REQUEST",
+  "leadHealthScore": 86,
+  "icpFitScore": 91,
+  "nextAction": "Send assessment-oriented connection request",
+  "dueDate": "2026-05-28T14:00:00.000Z",
+  "outreachAngle": "Invite Taylor to compare operating gaps.",
+  "latestTouchStatus": "DRAFTED",
+  "twentyUrl": "https://app.twenty.com/...",
+  "linkedinUrl": "https://www.linkedin.com/in/example"
+}
+```
+
+## GET /api/queues/follow-ups
+
+Returns due or overdue follow-up tasks.
+
+Criteria draft:
+
+- Task status is `TODO` or `IN_PROGRESS`.
+- Task due date is today or earlier.
+- Lead is not paused, completed, disqualified, or booked.
+
+Sorting:
+
+1. overdue first
+2. highest lead health score
+3. highest ICP fit score
+4. oldest due date
+
+## GET /api/queues/warm-assessments
+
+Returns assessment completions needing review.
+
+Criteria draft:
+
+- `assessmentCompleted=true`
+- assessment completions become warm immediately
+- recent completion or no completed review task
+- high assessment score or discovery-ready CRM state
+- other leads can become warm through response count, response quality,
+  lead evaluation, industry event trigger, company activity, or
+  `leadHealthScore > 50`
+
+Protected assessment fields remain read-only from workspace Quick Capture.
+
+## GET /api/queues/stale-recovery
+
+Returns leads at risk of being forgotten.
+
+Criteria draft:
+
+- `staleRisk=HIGH` or `STALE`
+- no inbound/outbound activity for 3 months
+- no response after a full cadence cycle
+- `nextOutboundTouchDate` is in the past
+- no recent completed outbound event
+- not disqualified or completed
+
+## GET /api/queues/pipeline-review
+
+Returns high-priority records needing sales judgment.
+
+Criteria draft:
+
+- `discoveryReadiness=READY` or `REQUESTED`
+- `leadHealthScore > 75` supports Discovery Ready recommendation
+- Opportunity exists or should be considered
+- assessment completion or positive response signal exists
+- normal path is cold -> warm -> discovery, with manual override allowed
+
+## POST /api/tasks/:id/complete
+
+Marks a task complete in the CRM and writes an outbound event.
+
+Request:
+
+```json
+{
+  "completionRule": "Connection Request Sent",
+  "completionNote": "Connection request sent manually.",
+  "touchChannel": "LINKEDIN",
+  "touchStatus": "SENT",
+  "completedAt": "2026-05-27T18:00:00.000Z",
+  "generateNextTask": true,
+  "manualOverride": false
+}
+```
+
+Supported completion rules:
+
+- `Review Fresh Leads`
+- `Lead Research Completed`
+- `Message Sent`
+- `Assessment Sent`
+- `Connection Request Sent`
+- `Add to Pipeline`
+
+The backend should generate only one next task at a time according to cadence
+stage. Example: `Connection Request Sent` can generate a Day 3 follow-up task.
+
+Response:
+
+```json
+{
+  "data": {
+    "taskId": "twenty-task-id",
+    "taskStatus": "DONE",
+    "outboundEventId": "supabase-event-id",
+    "nextTask": {}
+  }
+}
+```
+
+## POST /api/tasks/:id/pause
+
+Pauses an active task/cadence path.
+
+Request:
+
+```json
+{
+  "reason": "Not interested right now.",
+  "resumeOn": null
+}
+```
+
+Pause reasons include not interested, end of cadence cycle, data quality issue,
+or manual rep judgment. Pausing should write an outbound event and prevent
+automatic next-task generation.
+
+## POST /api/tasks/:id/resume
+
+Resumes a paused task/cadence path.
+
+Request:
+
+```json
+{
+  "reason": "Rep observed a new company activity signal.",
+  "nextCadenceStage": "VALUE_TOUCH"
+}
+```
+
+Resume signals can include role change, industry/company change, response,
+company activity, or rep-observed opportunity. Resume should create exactly one
+next task.
+
+## POST /api/outbound-events
+
+Creates a structured outbound event. This should represent a manual or approved
+action, not an automated LinkedIn action.
+
+Request:
+
+```json
+{
+  "personId": "twenty-person-id",
+  "companyId": "twenty-company-id",
+  "taskId": "twenty-task-id",
+  "eventType": "manual_touch_logged",
+  "channel": "linkedin",
+  "status": "sent",
+  "payload": {
+    "summary": "Rep manually sent connection request.",
+    "messageCopy": ""
+  }
+}
+```
+
+## GET /api/recovery/retryable-failures
+
+Returns retryable CRM sync failures and dead-letter candidates.
+
+Response item:
+
+```json
+{
+  "id": "crm-sync-log-id",
+  "correlationId": "quick-capture:...",
+  "provider": "twenty",
+  "object": "company",
+  "action": "upsert",
+  "dedupeKey": "company:domain:example.com",
+  "retryable": true,
+  "retryCount": 1,
+  "maxRetries": 3,
+  "lastError": "Request failed with status code 502",
+  "retryAfter": null,
+  "suggestedAction": "Retry failed Company upsert.",
+  "createdAt": "2026-05-27T17:17:01.000Z"
+}
+```
+
+## POST /api/recovery/:id/retry
+
+Retries one failed operation by CRM sync log ID.
+
+Request:
+
+```json
+{
+  "reason": "Operator approved retry after transient provider failure."
+}
+```
+
+Response:
+
+```json
+{
+  "data": {
+    "retriedOperation": {
+      "object": "company",
+      "dedupeKey": "company:domain:example.com"
+    },
+    "status": "succeeded",
+    "auditLogId": "new-crm-sync-log-id",
+    "crmRecordId": "twenty-company-id"
+  }
+}
+```
+
+## Reporting Endpoints
+
+Reporting can start as one aggregate endpoint:
+
+```text
+GET /api/reporting/summary?from=2026-05-01&to=2026-05-27
+```
+
+Response:
+
+```json
+{
+  "data": {
+    "leadsCapturedThisWeek": 12,
+    "tasksDueToday": 8,
+    "overdueFollowUps": 3,
+    "assessmentCompletions": 5,
+    "quickCapturesByRep": [],
+    "touchesByChannel": [],
+    "staleLeads": 4,
+    "conversionBySource": []
+  }
+}
+```
+
+Split reporting into smaller endpoints only after the UI proves which queries
+are used frequently.
+
+## Open Contract Questions
+
+- Where should Supabase Auth roles live: user metadata, app metadata, or a
+  dedicated workspace profile table?
+- Should operators be able to retry only retryable failures while admins can
+  override dead-letter failures after a fix?
+- Should task completion update Twenty only, Supabase only, or both in one
+  transaction-like workflow?
+- Should Quick Capture commit be enabled in staging immediately, or remain
+  preview-only until the workspace form is reviewed?
+- Should merge decisions be stored as a new Supabase table or as
+  `outbound_events` payloads first?

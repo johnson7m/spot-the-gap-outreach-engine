@@ -27,7 +27,7 @@ Use this checklist before the first controlled live CRM sync test. Keep the prod
 - [ ] Twenty metadata discovery succeeds.
 - [ ] Twenty schema validation passes.
 - [ ] `leadstageAuto` contains `DISQUALIFIED_NURTURE`.
-- [ ] `leadstageAuto` no longer contains typo value `DISQUALIFIED_NUTURE`.
+- [ ] `leadstageAuto` contains `DISQUALIFIED_NURTURE` and does not contain historical typo value `DISQUALIFIED_NUTURE`.
 - [ ] Relationship metadata has been reviewed:
   - [ ] `person.company`
   - [ ] `task.taskTargets`

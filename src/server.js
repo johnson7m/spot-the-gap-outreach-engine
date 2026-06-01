@@ -6,14 +6,19 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config/env.js';
 import { logger } from './config/logger.js';
 import { createFixedWindowRateLimiter } from './middleware/rateLimit.js';
+import { createQuickCaptureApiRouter } from './routes/api/quickCaptureRoutes.js';
 import { processAssessmentSubmission } from './workflows/assessmentWorkflow.js';
 import { createCorrelationId } from './utils/idempotency.js';
 
-export function createApp({ config = loadConfig(), appLogger = logger } = {}) {
+export function createApp({
+  config = loadConfig(),
+  appLogger = logger,
+  quickCaptureApiDependencies = {}
+} = {}) {
   const app = express();
 
   app.use(helmet());
-  app.use(cors({ origin: config.corsOrigin === '*' ? true : config.corsOrigin }));
+  app.use(cors(createCorsOptions(config)));
   app.use(pinoHttp({ logger: appLogger }));
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: true, limit: '1mb' }));
@@ -31,6 +36,15 @@ export function createApp({ config = loadConfig(), appLogger = logger } = {}) {
       environment: config.env
     });
   });
+
+  app.use(
+    '/api/quick-capture',
+    createQuickCaptureApiRouter({
+      config,
+      log: appLogger,
+      ...quickCaptureApiDependencies
+    })
+  );
 
   const webhookRateLimiter = createFixedWindowRateLimiter({
     windowMs: config.webhookRateLimit?.windowMs,
@@ -83,6 +97,27 @@ export function createApp({ config = loadConfig(), appLogger = logger } = {}) {
   });
 
   return app;
+}
+
+function createCorsOptions(config = {}) {
+  if (config.corsOrigin === '*') {
+    return { origin: true };
+  }
+
+  const allowedOrigins = new Set(
+    [config.corsOrigin, config.workspace?.allowedOrigin].filter(Boolean)
+  );
+
+  return {
+    origin(origin, callback) {
+      if (!origin || allowedOrigins.has(origin)) {
+        callback(null, true);
+        return;
+      }
+
+      callback(new Error('Origin is not allowed by CORS.'));
+    }
+  };
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

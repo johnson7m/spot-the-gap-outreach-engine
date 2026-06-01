@@ -13,6 +13,7 @@ export function createCrmAdapter({
 
   const crmProvider = createTwentyProvider({
     config: config.twenty ?? config,
+    quickCapture: config.quickCapture ?? {},
     log,
     schemaOverride,
     restClient
@@ -23,6 +24,14 @@ export function createCrmAdapter({
 
     async syncAssessmentSubmission({ submission, score, completedOperations }) {
       return crmProvider.syncAssessment({ submission, score, completedOperations });
+    },
+
+    async syncQuickCaptureLead({ lead, payloads }) {
+      return crmProvider.syncQuickCapture({ lead, payloads });
+    },
+
+    async syncQuickCaptureOperations({ lead, operations }) {
+      return crmProvider.syncQuickCaptureOperations({ lead, operations });
     }
   };
 }

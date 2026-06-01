@@ -24,14 +24,21 @@ const envSchema = z.object({
   WEBHOOK_SHARED_SECRET: z.string().optional(),
   WEBHOOK_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60000),
   WEBHOOK_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(30),
+  WORKSPACE_ALLOWED_ORIGIN: z.string().optional().or(z.literal('')),
+  WORKSPACE_API_SECRET: z.string().optional(),
   SUPABASE_ENABLED: booleanFromEnv.default(false),
   SUPABASE_URL: z.string().url().optional().or(z.literal('')),
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
   TWENTY_SYNC_ENABLED: booleanFromEnv.default(false),
+  QUICK_CAPTURE_SYNC_ENABLED: booleanFromEnv.default(false),
+  QUICK_CAPTURE_API_COMMIT_ENABLED: booleanFromEnv.default(false),
+  QUICK_CAPTURE_API_PREVIEW_ENABLED: booleanFromEnv.default(true),
   TWENTY_BASE_URL: z.string().url().optional().or(z.literal('')),
   TWENTY_API_BASE_URL: z.string().url().optional().or(z.literal('')),
   TWENTY_API_KEY: z.string().optional(),
   TWENTY_WORKSPACE_ID: z.string().optional(),
+  QUICK_CAPTURE_MAX_RETRIES: z.coerce.number().int().min(0).default(3),
+  QUICK_CAPTURE_RETRY_BASE_MS: z.coerce.number().int().min(0).default(1000),
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_MODEL: z.string().optional().default('')
 });
@@ -65,6 +72,10 @@ export function loadConfig() {
       windowMs: parsed.data.WEBHOOK_RATE_LIMIT_WINDOW_MS,
       max: parsed.data.WEBHOOK_RATE_LIMIT_MAX
     },
+    workspace: {
+      allowedOrigin: parsed.data.WORKSPACE_ALLOWED_ORIGIN || undefined,
+      apiSecret: parsed.data.WORKSPACE_API_SECRET
+    },
     supabase: {
       enabled: parsed.data.SUPABASE_ENABLED,
       url: parsed.data.SUPABASE_URL || undefined,
@@ -78,6 +89,13 @@ export function loadConfig() {
         'https://api.twenty.com',
       apiKey: parsed.data.TWENTY_API_KEY,
       workspaceId: parsed.data.TWENTY_WORKSPACE_ID
+    },
+    quickCapture: {
+      syncEnabled: parsed.data.QUICK_CAPTURE_SYNC_ENABLED,
+      apiCommitEnabled: parsed.data.QUICK_CAPTURE_API_COMMIT_ENABLED,
+      apiPreviewEnabled: parsed.data.QUICK_CAPTURE_API_PREVIEW_ENABLED,
+      maxRetries: parsed.data.QUICK_CAPTURE_MAX_RETRIES,
+      retryBaseMs: parsed.data.QUICK_CAPTURE_RETRY_BASE_MS
     },
     openai: {
       apiKey: parsed.data.OPENAI_API_KEY,

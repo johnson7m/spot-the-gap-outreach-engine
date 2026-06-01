@@ -61,12 +61,30 @@ export function unwrapListResponse(data, objectPlural) {
 }
 
 export function unwrapRecordResponse(data, objectPlural) {
+  const mutationRecord = getMutationRecord(data?.data);
+
+  if (mutationRecord) {
+    return mutationRecord;
+  }
+
   return (
     data?.data?.[objectPlural] ??
     data?.data?.[singularize(objectPlural)] ??
     data?.data ??
     data
   );
+}
+
+function getMutationRecord(value) {
+  if (!value || Array.isArray(value) || typeof value !== 'object') {
+    return null;
+  }
+
+  const mutationEntry = Object.entries(value).find(
+    ([key, record]) => /^(create|update)/.test(key) && record?.id
+  );
+
+  return mutationEntry?.[1] ?? null;
 }
 
 function singularize(value) {

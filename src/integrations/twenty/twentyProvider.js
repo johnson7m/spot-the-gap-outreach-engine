@@ -3,12 +3,19 @@ import { createTwentyMetadataClient } from './metadataClient.js';
 import { createOpportunityClient } from './opportunityClient.js';
 import { createPeopleClient } from './peopleClient.js';
 import { buildAssessmentCrmPayloads } from './payloadBuilders.js';
+import { createQuickCaptureClient } from './quickCaptureClient.js';
 import { validateTwentyRelationships } from './relationshipValidator.js';
 import { createTwentyRestClient } from './restClient.js';
 import { validateTwentySchema } from './schemaValidator.js';
 import { createTaskClient } from './taskClient.js';
 
-export function createTwentyProvider({ config = {}, log, schemaOverride, restClient } = {}) {
+export function createTwentyProvider({
+  config = {},
+  log,
+  schemaOverride,
+  restClient,
+  quickCapture = {}
+} = {}) {
   const dryRun = !config.syncEnabled;
   const metadataClient = createTwentyMetadataClient(config, log);
   const twentyRestClient = restClient ?? (config.apiKey ? createTwentyRestClient(config) : null);
@@ -16,6 +23,15 @@ export function createTwentyProvider({ config = {}, log, schemaOverride, restCli
   const companyClient = createCompanyClient({ dryRun, log, restClient: twentyRestClient });
   const taskClient = createTaskClient({ dryRun, log, restClient: twentyRestClient });
   const opportunityClient = createOpportunityClient({ dryRun, log, restClient: twentyRestClient });
+  const quickCaptureClient = createQuickCaptureClient({
+    dryRun,
+    log,
+    restClient: twentyRestClient,
+    retry: {
+      maxRetries: quickCapture.maxRetries,
+      baseMs: quickCapture.retryBaseMs
+    }
+  });
 
   return {
     provider: 'twenty',
@@ -100,6 +116,50 @@ export function createTwentyProvider({ config = {}, log, schemaOverride, restCli
         relationshipValidation,
         operations
       };
+    },
+
+    async syncQuickCapture({ lead, payloads }) {
+      if (!dryRun && !config.apiKey) {
+        return {
+          provider: 'twenty',
+          status: 'blocked_configuration',
+          dryRun: false,
+          reason: 'Twenty CRM live Quick Capture sync is enabled, but TWENTY_API_KEY is missing.',
+          operations: Object.values(payloads)
+            .filter(Boolean)
+            .map((operation) => ({
+              object: operation.object,
+              action: operation.action,
+              status: 'planned',
+              dedupeKey: operation.dedupeKey,
+              payload: operation.payload
+            })),
+          skippedRelationships: []
+        };
+      }
+
+      return quickCaptureClient.syncQuickCapture({ lead, payloads });
+    },
+
+    async syncQuickCaptureOperations({ lead, operations }) {
+      if (!dryRun && !config.apiKey) {
+        return {
+          provider: 'twenty',
+          status: 'blocked_configuration',
+          dryRun: false,
+          reason: 'Twenty CRM live Quick Capture sync is enabled, but TWENTY_API_KEY is missing.',
+          operations: operations.map((operation) => ({
+            object: operation.object,
+            action: operation.action,
+            status: 'planned',
+            dedupeKey: operation.dedupeKey,
+            payload: operation.payload
+          })),
+          skippedRelationships: []
+        };
+      }
+
+      return quickCaptureClient.syncQuickCaptureOperations({ lead, operations });
     }
   };
 }

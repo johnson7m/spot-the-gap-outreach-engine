@@ -14,7 +14,10 @@
     "check:staging": "node scripts/validateStagingReadiness.js",
     "test:sync:dry": "node scripts/runAssessmentSyncTest.js",
     "test:sync:live": "LIVE_TEST=true node scripts/runAssessmentSyncTest.js",
-    "test:webhook:staging": "node scripts/sendStagingWebhookTest.js"
+    "test:webhook:staging": "node scripts/sendStagingWebhookTest.js",
+    "quick-capture:dry": "node scripts/runQuickCaptureDryRun.js",
+    "quick-capture:live": "node scripts/runQuickCaptureLiveTest.js",
+    "quick-capture:retry-failed": "node scripts/retryQuickCaptureFailedOperations.js"
   },
   "keywords": [
     "visible-gap",

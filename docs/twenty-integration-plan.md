@@ -64,14 +64,14 @@ Initial required objects:
 - select/rating values exist
 - unexpected select values are surfaced as warnings
 
-Current validation should fail until the `leadstageAuto` value mismatch is resolved:
+Historical validation failed until the `leadstageAuto` value mismatch was resolved:
 
 ```text
 Expected: DISQUALIFIED_NURTURE
 Discovered: DISQUALIFIED_NUTURE
 ```
 
-The validator intentionally produces human-readable errors so schema issues can be fixed before live execution.
+The corrected `DISQUALIFIED_NURTURE` value was confirmed in the 2026-05-27 metadata inspection. The validator intentionally produces human-readable errors so future schema issues can be fixed before live execution.
 
 ## Dry-Run Execution Model
 
@@ -109,6 +109,22 @@ Retry behavior:
 - Failed operations are attempted again after the payload or configuration issue is fixed.
 - This prevents duplicate Company, Person, or Task records during controlled retry testing.
 
+Quick Capture uses the same operational principle, but recovery is driven by
+Quick Capture audit logs instead of assessment submission IDs:
+
+- retryable Twenty errors are `429`, `502`, `503`, and `504`
+- `retry_after` is respected when Twenty or Cloudflare provides it
+- otherwise bounded exponential backoff starts at `QUICK_CAPTURE_RETRY_BASE_MS`
+- `QUICK_CAPTURE_MAX_RETRIES` limits retry attempts after the original write
+- recovery retries only the failed object operation from `crm_sync_logs`
+- Person and Task operations are not replayed when Company recovery is needed
+
+Manual recovery command:
+
+```bash
+QUICK_CAPTURE_SYNC_ENABLED=true TWENTY_SYNC_ENABLED=true LIVE_TEST=true npm run quick-capture:retry-failed
+```
+
 Confirmed Opportunity live payload:
 
 ```json
@@ -128,7 +144,7 @@ The Opportunity object does not currently include `source`, `assessmentScore`, `
 2. Configure staging environment variables from `.env.example`.
 3. Keep `TWENTY_SYNC_ENABLED=false`.
 4. Run `npm run check:staging`.
-5. Fix any schema blockers, especially `leadstageAuto`.
+5. Fix any schema blockers surfaced by metadata validation.
 6. Run `npm run test:sync:dry` and review the printed execution plan.
 7. Confirm expected test records:
    - Person: `visiblegap.sync-test@example.com`
