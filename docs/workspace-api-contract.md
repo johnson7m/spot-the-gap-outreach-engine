@@ -169,10 +169,14 @@ Request:
     "companyWebsite": "https://example.com",
     "linkedinUrl": "https://www.linkedin.com/in/example-test",
     "email": "taylor@example.com",
-    "phone": "+1 555 010 0142",
+    "phone": "555 010 0142",
+    "phoneCountryCode": "US",
+    "phoneCallingCode": "+1",
     "leadSource": "LINKEDIN",
     "outboundPipelineType": "ASSESSMENT_CAMPAIGN",
-    "notes": "Manual capture context.",
+    "companySegment": "SMALL_BUSINESS",
+    "companyIndustry": "INFORMATION_TECHNOLOGY_IT",
+    "notes": "",
     "assignedRep": "workspace-user-id"
   }
 }
@@ -180,6 +184,20 @@ Request:
 
 The endpoint also accepts the lead fields at the request body root for early UI
 integration, but the preferred shape is `{ "lead": { ... } }`.
+
+`notes` is optional when at least one other capture context path is provided:
+`linkedinUrl`, `email`, or `phone`.
+
+Phone support is currently US-focused. The workspace should send
+`phoneCountryCode=US` and `phoneCallingCode=+1`. Invalid or unsafe phone values
+are omitted with warnings rather than blocking the entire capture.
+
+Confirmed Company values:
+
+- `companySegment`: `SMALL_BUSINESS`, `COMMERCIAL`, `MID_MARKET`, `ENTERPRISE`
+- `companyIndustry`: `INFORMATION_TECHNOLOGY_IT`, `FINANCIALS`,
+  `CONSUMER_DISCRETIONARY`, `CONSUMER_STAPLES`, `INDUSTRIALS`,
+  `COMMUNICATION_SERVICES`, `ENERGY`, `MATERIALS`, `UTILITIES`, `REAL_ESTATE`
 
 Response:
 
@@ -221,6 +239,11 @@ Response:
       "roleSource": "profile",
       "profileId": "workspace-profile-id"
     },
+    "workspaceMember": {
+      "id": "twenty-workspace-member-id",
+      "userEmail": "rep@visiblegap.com",
+      "userId": "twenty-user-id"
+    },
     "skippedRelationships": [],
     "warnings": []
   },
@@ -232,6 +255,17 @@ Response:
 Preview responses can include non-blocking warnings for missing optional dedupe
 keys, unresolved relationship mappings, or schema metadata that could not be
 validated locally.
+
+Owner/assignee resolution:
+
+- The engine matches `workspace_profiles.email` to Twenty
+  `workspaceMember.userEmail`.
+- When a match exists, payloads can include:
+  - Person `ownerId`
+  - Company `accountOwnerId`
+  - Task `assigneeId`
+- When no match exists, those fields are omitted and warnings are returned.
+- The engine does not guess owner or assignee relation shapes.
 
 ## POST /api/quick-capture/commit
 
@@ -279,6 +313,10 @@ SUPABASE_ENABLED=true
 If any guard is missing, the endpoint returns a structured error and does not
 write to Twenty. Commit always excludes protected assessment fields.
 
+Commit may still proceed with warnings when optional Quick Capture fields cannot
+be safely mapped. Examples: invalid phone omitted, owner match not found,
+assignee match not found, or Company Segment/Industry unavailable in metadata.
+
 Request:
 
 ```json
@@ -288,9 +326,14 @@ Request:
     "lastName": "Morgan",
     "companyName": "Visible Gap Test Company",
     "email": "taylor@example.com",
+    "phone": "555 010 0142",
+    "phoneCountryCode": "US",
+    "phoneCallingCode": "+1",
     "leadSource": "LINKEDIN",
     "outboundPipelineType": "ASSESSMENT_CAMPAIGN",
-    "notes": "Manual capture context."
+    "companySegment": "SMALL_BUSINESS",
+    "companyIndustry": "INFORMATION_TECHNOLOGY_IT",
+    "notes": ""
   },
   "approval": {
     "approvedBy": "workspace-user-id",
@@ -329,6 +372,10 @@ Response:
       "authenticated": true,
       "role": "rep",
       "roleSource": "profile"
+    },
+    "workspaceMember": {
+      "id": "twenty-workspace-member-id",
+      "userEmail": "rep@visiblegap.com"
     },
     "protectedFieldCheck": {
       "ok": true,

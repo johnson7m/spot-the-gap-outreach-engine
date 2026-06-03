@@ -28,6 +28,8 @@ to Twenty or Supabase from the browser.
 The workspace should give reps and operators one quiet, reliable place to:
 
 - capture manually sourced leads
+- preserve in-progress Quick Capture drafts during normal navigation/session
+  refresh
 - review CRM payloads before Quick Capture writes
 - work daily queues
 - complete follow-up tasks
@@ -192,6 +194,16 @@ Resolved roles:
 - `operator`
 - `rep`
 
+Workspace session behavior:
+
+- Session checks should run in the background during normal valid sessions.
+- Protected pages should not hard reload or unmount during routine token/profile
+  refresh.
+- Quick Capture drafts can be stored in browser `sessionStorage` for the active
+  tab/session.
+- Draft persistence is UI-only. It does not imply CRM writes or Supabase
+  persistence until the rep previews and explicitly commits.
+
 For the first workspace preview integration, leave `TWENTY_SYNC_ENABLED=false`
 and `QUICK_CAPTURE_API_COMMIT_ENABLED=false`. The UI can safely call
 `POST /api/quick-capture/preview` to render normalized lead data, dedupe
@@ -246,6 +258,15 @@ visible-gap-workspace
 
 The workspace is a client. It should display plans, warnings, IDs, and recovery
 states, but execution remains in the outreach engine.
+
+Quick Capture preview should display optional mapping results:
+
+- normalized phone payload or phone omission warning
+- Company `segment` and `industry` mapping
+- resolved Twenty `workspaceMember`
+- Person `ownerId`, Company `accountOwnerId`, and Task `assigneeId` presence
+  when available
+- warnings when owner/assignee matching fails
 
 ## Source Of Truth
 

@@ -20,10 +20,14 @@ export function normalizeQuickCaptureLead(input = {}) {
     linkedinUrl: normalizeUrl(input.linkedinUrl),
     email: normalizeEmail(input.email),
     phone: normalizeWhitespace(input.phone),
+    phoneCountryCode: normalizeSelect(input.phoneCountryCode),
+    phoneCallingCode: normalizeCallingCode(input.phoneCallingCode),
     leadSource: normalizeWhitespace(input.leadSource),
     outboundPipelineType: normalizeSelect(input.outboundPipelineType),
     notes: normalizeWhitespace(input.notes),
-    assignedRep: normalizeWhitespace(input.assignedRep)
+    assignedRep: normalizeWhitespace(input.assignedRep),
+    companySegment: normalizeSelect(input.companySegment ?? input.segment),
+    companyIndustry: normalizeSelect(firstValue(input.companyIndustry ?? input.industry))
   };
 
   validateQuickCaptureLead(normalized);
@@ -49,8 +53,8 @@ export function validateQuickCaptureLead(lead) {
     errors.push('leadSource is required.');
   }
 
-  if (!lead.linkedinUrl && !lead.email && !lead.notes) {
-    errors.push('At least one of linkedinUrl, email, or notes is required for capture context.');
+  if (!lead.linkedinUrl && !lead.email && !lead.phone && !lead.notes) {
+    errors.push('At least one of linkedinUrl, email, phone, or notes is required for capture context.');
   }
 
   if (errors.length > 0) {
@@ -139,6 +143,16 @@ function normalizeSelect(value) {
   return normalizeWhitespace(value).toUpperCase();
 }
 
+function normalizeCallingCode(value) {
+  const normalized = normalizeWhitespace(value);
+
+  if (!normalized) {
+    return '';
+  }
+
+  return normalized.startsWith('+') ? normalized : `+${normalized}`;
+}
+
 function normalizeUrl(value) {
   const normalized = normalizeWhitespace(value);
 
@@ -165,4 +179,8 @@ function extractDomain(value) {
   } catch {
     return '';
   }
+}
+
+function firstValue(value) {
+  return Array.isArray(value) ? value[0] : value;
 }

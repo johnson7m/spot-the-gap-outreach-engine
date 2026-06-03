@@ -4,10 +4,13 @@ import sampleLead from '../data/sample-quick-capture-lead.json' with { type: 'js
 import { buildSchemaSnapshot } from '../src/integrations/twenty/metadataClient.js';
 import {
   buildQuickCaptureCrmPayloads,
+  createQuickCaptureCompanyPayload,
   createQuickCapturePersonPayload,
+  createQuickCaptureTaskPayload,
   createTwentyPhonePayload
 } from '../src/integrations/twenty/outboundPayloadBuilders.js';
 import { validateQuickCapturePersonPayload } from '../src/integrations/twenty/personPayloadValidator.js';
+import { resolveWorkspaceMemberForQuickCapture } from '../src/integrations/twenty/workspaceMemberResolver.js';
 import {
   createQuickCaptureClient,
   PROTECTED_ASSESSMENT_FIELDS
@@ -99,6 +102,44 @@ describe('Quick Capture normalization', () => {
     });
     expect(fallbackLead.dedupe.strategy).toBe('name_company');
     expect(fallbackLead.dedupe.key).toMatch(/^person:name-company:/);
+  });
+
+  it('allows notes to be optional when contact context is present', () => {
+    const lead = normalizeQuickCaptureLead({
+      firstName: 'Taylor',
+      lastName: 'Morgan',
+      companyName: 'Visible Gap Quick Capture Test Company',
+      email: 'taylor@example.com',
+      leadSource: 'LINKEDIN_MANUAL_CAPTURE'
+    });
+
+    expect(lead.notes).toBe('');
+    expect(lead.dedupe).toEqual({
+      strategy: 'email',
+      key: 'person:email:taylor@example.com'
+    });
+  });
+
+  it('normalizes structured phone and Company Segment/Industry inputs', () => {
+    const lead = normalizeQuickCaptureLead({
+      firstName: 'Taylor',
+      lastName: 'Morgan',
+      companyName: 'Visible Gap Quick Capture Test Company',
+      phone: '555 010 0142',
+      phoneCountryCode: 'us',
+      phoneCallingCode: '1',
+      leadSource: 'LINKEDIN_MANUAL_CAPTURE',
+      companySegment: 'small_business',
+      companyIndustry: ['information_technology_it']
+    });
+
+    expect(lead).toMatchObject({
+      phone: '555 010 0142',
+      phoneCountryCode: 'US',
+      phoneCallingCode: '+1',
+      companySegment: 'SMALL_BUSINESS',
+      companyIndustry: 'INFORMATION_TECHNOLOGY_IT'
+    });
   });
 });
 
@@ -391,6 +432,18 @@ describe('Quick Capture CRM payload generation', () => {
 
   it('omits phone payload when the number lacks country and calling code shape', () => {
     expect(createTwentyPhonePayload('5555555555')).toBeNull();
+    expect(
+      createTwentyPhonePayload({
+        phone: '555 010 0142',
+        phoneCountryCode: 'US',
+        phoneCallingCode: '+1'
+      })
+    ).toEqual({
+      primaryPhoneCountryCode: 'US',
+      primaryPhoneCallingCode: '+1',
+      primaryPhoneNumber: '5550100142',
+      additionalPhones: []
+    });
     expect(createTwentyPhonePayload('+1 555 010 0142')).toEqual({
       primaryPhoneCountryCode: 'US',
       primaryPhoneCallingCode: '+1',
@@ -426,6 +479,217 @@ describe('Quick Capture CRM payload generation', () => {
         'Field "latestTouchStatus" value "UNSUPPORTED" is not in Twenty select options.'
       ])
     );
+  });
+
+  it('maps Company Segment and Industry only when metadata-confirmed fields are supported', () => {
+    const lead = normalizeQuickCaptureLead({
+      ...sampleLead,
+      companySegment: 'SMALL_BUSINESS',
+      companyIndustry: 'INFORMATION_TECHNOLOGY_IT'
+    });
+    const payload = createQuickCaptureCompanyPayload({
+      lead,
+      supportedCompanyFields: new Set(['name', 'domainName', 'segment', 'industry'])
+    });
+    const unsupportedPayload = createQuickCaptureCompanyPayload({
+      lead,
+      supportedCompanyFields: new Set(['name', 'domainName'])
+    });
+
+    expect(payload).toMatchObject({
+      segment: 'SMALL_BUSINESS',
+      industry: ['INFORMATION_TECHNOLOGY_IT']
+    });
+    expect(unsupportedPayload).not.toHaveProperty('segment');
+    expect(unsupportedPayload).not.toHaveProperty('industry');
+  });
+
+  it('maps Person owner and Task assignee by confirmed relation id fields', () => {
+    const lead = normalizeQuickCaptureLead(sampleLead);
+    const workspaceMember = {
+      id: 'af030bae-2ab9-49a5-afb7-d0decd711409',
+      userEmail: 'rep@visiblegap.com'
+    };
+    const personPayload = createQuickCapturePersonPayload({
+      lead,
+      scores: {
+        icpFitScore: 80,
+        leadHealthScore: 85,
+        staleRisk: 'LOW',
+        discoveryReadiness: 'MONITOR',
+        outreachAngle: 'Angle.'
+      },
+      cadence: {
+        pipelineType: 'ASSESSMENT_CAMPAIGN',
+        cadenceName: 'ASSESSMENT_CAMPAIGN_V1',
+        cadenceStage: 'CONNECTION_REQUEST',
+        nextOutboundTouchDate: '2026-05-28',
+        firstTask: {
+          channel: 'LINKEDIN'
+        }
+      },
+      supportedPersonFields: confirmedPersonFields({ includeOwner: true }),
+      workspaceMember
+    });
+    const taskPayload = createQuickCaptureTaskPayload({
+      lead,
+      scores: {
+        icpFitScore: 80,
+        leadHealthScore: 85,
+        staleRisk: 'LOW',
+        discoveryReadiness: 'MONITOR',
+        outreachAngle: 'Angle.'
+      },
+      cadence: {
+        pipelineType: 'ASSESSMENT_CAMPAIGN',
+        cadenceName: 'ASSESSMENT_CAMPAIGN_V1',
+        cadenceStage: 'CONNECTION_REQUEST',
+        firstTask: {
+          title: 'Send assessment-oriented connection request',
+          dueAt: '2026-05-28T14:00:00.000Z',
+          channel: 'LINKEDIN',
+          body: 'Manual task.'
+        }
+      },
+      dedupeKey: 'quick-capture:test:task',
+      supportedTaskFields: new Set(['title', 'status', 'dueAt', 'bodyV2', 'assignee']),
+      workspaceMember
+    });
+
+    expect(personPayload.ownerId).toBe(workspaceMember.id);
+    expect(taskPayload.assigneeId).toBe(workspaceMember.id);
+  });
+
+  it('omits owner and assignee when relation fields are not confirmed', () => {
+    const lead = normalizeQuickCaptureLead(sampleLead);
+    const workspaceMember = {
+      id: 'af030bae-2ab9-49a5-afb7-d0decd711409'
+    };
+    const personPayload = createQuickCapturePersonPayload({
+      lead,
+      scores: {
+        icpFitScore: 80,
+        leadHealthScore: 85,
+        staleRisk: 'LOW',
+        discoveryReadiness: 'MONITOR',
+        outreachAngle: 'Angle.'
+      },
+      cadence: {
+        pipelineType: 'ASSESSMENT_CAMPAIGN',
+        cadenceName: 'ASSESSMENT_CAMPAIGN_V1',
+        cadenceStage: 'CONNECTION_REQUEST',
+        nextOutboundTouchDate: '2026-05-28',
+        firstTask: {
+          channel: 'LINKEDIN'
+        }
+      },
+      supportedPersonFields: confirmedPersonFields()
+    });
+    const taskPayload = createQuickCaptureTaskPayload({
+      lead,
+      scores: {
+        icpFitScore: 80,
+        leadHealthScore: 85,
+        staleRisk: 'LOW',
+        discoveryReadiness: 'MONITOR',
+        outreachAngle: 'Angle.'
+      },
+      cadence: {
+        pipelineType: 'ASSESSMENT_CAMPAIGN',
+        cadenceName: 'ASSESSMENT_CAMPAIGN_V1',
+        cadenceStage: 'CONNECTION_REQUEST',
+        firstTask: {
+          title: 'Send assessment-oriented connection request',
+          dueAt: '2026-05-28T14:00:00.000Z',
+          channel: 'LINKEDIN',
+          body: 'Manual task.'
+        }
+      },
+      dedupeKey: 'quick-capture:test:task',
+      supportedTaskFields: new Set(['title', 'status', 'dueAt', 'bodyV2']),
+      workspaceMember
+    });
+
+    expect(personPayload).not.toHaveProperty('ownerId');
+    expect(taskPayload).not.toHaveProperty('assigneeId');
+  });
+
+  it('validates REST ownerId against the confirmed Person owner relation', () => {
+    const validation = validateQuickCapturePersonPayload({
+      payload: {
+        name: { firstName: 'Taylor', lastName: 'Morgan' },
+        ownerId: 'af030bae-2ab9-49a5-afb7-d0decd711409'
+      },
+      lead: {
+        dedupe: {
+          strategy: 'email'
+        }
+      },
+      schema: quickCapturePersonSchema
+    });
+
+    expect(validation.ok).toBe(true);
+    expect(validation.fieldReport.find((field) => field.fieldName === 'ownerId')).toMatchObject({
+      status: 'included_valid'
+    });
+  });
+});
+
+describe('Twenty workspace member resolution', () => {
+  it('matches a Twenty workspace member by workspace profile email', async () => {
+    const result = await resolveWorkspaceMemberForQuickCapture({
+      config: {
+        apiKey: 'test-key'
+      },
+      workspaceUser: {
+        authenticated: true,
+        email: 'Rep@VisibleGap.com'
+      },
+      restClient: {
+        async listRecords(objectPlural) {
+          expect(objectPlural).toBe('workspaceMembers');
+
+          return [
+            {
+              id: 'af030bae-2ab9-49a5-afb7-d0decd711409',
+              userEmail: 'rep@visiblegap.com',
+              userId: 'twenty-user-1'
+            }
+          ];
+        }
+      }
+    });
+
+    expect(result.workspaceMember).toMatchObject({
+      id: 'af030bae-2ab9-49a5-afb7-d0decd711409',
+      userEmail: 'rep@visiblegap.com'
+    });
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('omits owner/assignee with a warning when no member email matches', async () => {
+    const result = await resolveWorkspaceMemberForQuickCapture({
+      config: {
+        apiKey: 'test-key'
+      },
+      workspaceUser: {
+        authenticated: true,
+        email: 'rep@visiblegap.com'
+      },
+      restClient: {
+        async listRecords() {
+          return [
+            {
+              id: 'workspace-member-2',
+              userEmail: 'other@visiblegap.com'
+            }
+          ];
+        }
+      }
+    });
+
+    expect(result.workspaceMember).toBeNull();
+    expect(result.warnings[0]).toContain('no Twenty workspace member matched rep@visiblegap.com');
   });
 });
 
@@ -492,6 +756,28 @@ describe('Quick Capture workflow dry-run safety', () => {
         }
       }
     });
+  });
+
+  it('omits invalid phone payloads with a warning instead of blocking preview', async () => {
+    const result = await processQuickCaptureLead({
+      input: {
+        firstName: 'Taylor',
+        lastName: 'Morgan',
+        companyName: 'Visible Gap Quick Capture Test Company',
+        phone: '555',
+        phoneCountryCode: 'US',
+        phoneCallingCode: '+1',
+        leadSource: 'LINKEDIN_MANUAL_CAPTURE'
+      },
+      config: testConfig,
+      schemaOverride: quickCapturePersonSchema,
+      now: new Date('2026-05-27T14:00:00.000Z')
+    });
+
+    expect(result.crmPayloads.person.payload).not.toHaveProperty('phones');
+    expect(result.warnings).toContain(
+      'Person phone omitted because Twenty PHONES writes require a valid US +1 phone shape with country and calling code context.'
+    );
   });
 });
 
@@ -1048,7 +1334,7 @@ function buildQuickCaptureTestPlan() {
   };
 }
 
-function confirmedPersonFields({ includeQuickCaptureUrl = true } = {}) {
+function confirmedPersonFields({ includeQuickCaptureUrl = true, includeOwner = false } = {}) {
   return new Set(
     [
       'name',
@@ -1068,6 +1354,7 @@ function confirmedPersonFields({ includeQuickCaptureUrl = true } = {}) {
       'latestTouchChannel',
       'latestTouchStatus',
       includeQuickCaptureUrl ? 'quickCaptureUrl' : null,
+      includeOwner ? 'owner' : null,
       'staleRisk',
       'discoveryReadiness'
     ].filter(Boolean)

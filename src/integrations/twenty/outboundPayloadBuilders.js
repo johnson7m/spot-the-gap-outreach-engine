@@ -2,21 +2,31 @@ export function buildQuickCaptureCrmPayloads({
   lead,
   scores,
   cadence,
-  supportedPersonFields = new Set()
+  supportedPersonFields = new Set(),
+  supportedCompanyFields = new Set(),
+  supportedTaskFields = new Set(),
+  workspaceMember
 }) {
-  const companyPayload = createQuickCaptureCompanyPayload({ lead });
+  const companyPayload = createQuickCaptureCompanyPayload({
+    lead,
+    supportedCompanyFields,
+    workspaceMember
+  });
   const personPayload = createQuickCapturePersonPayload({
     lead,
     scores,
     cadence,
-    supportedPersonFields
+    supportedPersonFields,
+    workspaceMember
   });
   const taskDedupeKey = `quick-capture:${lead.dedupe.key}:task:${cadence.cadenceName}:${cadence.cadenceStage}`;
   const taskPayload = createQuickCaptureTaskPayload({
     lead,
     scores,
     cadence,
-    dedupeKey: taskDedupeKey
+    dedupeKey: taskDedupeKey,
+    supportedTaskFields,
+    workspaceMember
   });
 
   return {
@@ -49,7 +59,8 @@ export function createQuickCapturePersonPayload({
   lead,
   scores,
   cadence,
-  supportedPersonFields = new Set()
+  supportedPersonFields = new Set(),
+  workspaceMember
 }) {
   const payload = {
     name: {
@@ -78,7 +89,7 @@ export function createQuickCapturePersonPayload({
     };
   }
 
-  const phonePayload = createTwentyPhonePayload(lead.phone);
+  const phonePayload = createTwentyPhonePayload(lead);
 
   if (phonePayload) {
     payload.phones = phonePayload;
@@ -102,10 +113,18 @@ export function createQuickCapturePersonPayload({
     };
   }
 
+  if (workspaceMember?.id && supportedPersonFields.has('owner')) {
+    payload.ownerId = workspaceMember.id;
+  }
+
   return stripUnsupportedPersonFields(stripEmpty(payload), supportedPersonFields);
 }
 
-export function createQuickCaptureCompanyPayload({ lead }) {
+export function createQuickCaptureCompanyPayload({
+  lead,
+  supportedCompanyFields = new Set(),
+  workspaceMember
+}) {
   const payload = {
     name: lead.companyName
   };
@@ -117,11 +136,30 @@ export function createQuickCaptureCompanyPayload({ lead }) {
     };
   }
 
+  if (lead.companySegment && supportedCompanyFields.has('segment')) {
+    payload.segment = lead.companySegment;
+  }
+
+  if (lead.companyIndustry && supportedCompanyFields.has('industry')) {
+    payload.industry = [lead.companyIndustry];
+  }
+
+  if (workspaceMember?.id && supportedCompanyFields.has('accountOwner')) {
+    payload.accountOwnerId = workspaceMember.id;
+  }
+
   return stripEmpty(payload);
 }
 
-export function createQuickCaptureTaskPayload({ lead, scores, cadence, dedupeKey }) {
-  return {
+export function createQuickCaptureTaskPayload({
+  lead,
+  scores,
+  cadence,
+  dedupeKey,
+  supportedTaskFields = new Set(),
+  workspaceMember
+}) {
+  const payload = {
     title: cadence.firstTask.title,
     status: 'TODO',
     dueAt: cadence.firstTask.dueAt,
@@ -129,6 +167,12 @@ export function createQuickCaptureTaskPayload({ lead, scores, cadence, dedupeKey
       markdown: buildTaskMarkdown({ lead, scores, cadence, dedupeKey })
     }
   };
+
+  if (workspaceMember?.id && supportedTaskFields.has('assignee')) {
+    payload.assigneeId = workspaceMember.id;
+  }
+
+  return payload;
 }
 
 function buildTaskMarkdown({ lead, scores, cadence, dedupeKey }) {
@@ -168,18 +212,40 @@ function stripUnsupportedPersonFields(payload, supportedPersonFields) {
   }
 
   return Object.fromEntries(
-    Object.entries(payload).filter(([fieldName]) => supportedPersonFields.has(fieldName))
+    Object.entries(payload).filter(([fieldName]) => {
+      if (fieldName === 'ownerId') {
+        return supportedPersonFields.has('owner');
+      }
+
+      return supportedPersonFields.has(fieldName);
+    })
   );
 }
 
-export function createTwentyPhonePayload(phone) {
-  const value = String(phone ?? '').trim();
+export function createTwentyPhonePayload(input) {
+  const value =
+    input && typeof input === 'object'
+      ? String(input.phone ?? '').trim()
+      : String(input ?? '').trim();
 
   if (!value) {
     return null;
   }
 
   const digits = value.replace(/\D/g, '');
+  const countryCode =
+    input && typeof input === 'object' ? String(input.phoneCountryCode ?? '').toUpperCase() : '';
+  const callingCode =
+    input && typeof input === 'object' ? String(input.phoneCallingCode ?? '') : '';
+
+  if (countryCode === 'US' && callingCode === '+1' && digits.length === 10) {
+    return {
+      primaryPhoneCountryCode: 'US',
+      primaryPhoneCallingCode: '+1',
+      primaryPhoneNumber: digits,
+      additionalPhones: []
+    };
+  }
 
   if (!value.startsWith('+1') || digits.length !== 11 || !digits.startsWith('1')) {
     return null;

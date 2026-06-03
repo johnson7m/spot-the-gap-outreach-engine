@@ -262,7 +262,8 @@ function toPreviewResponse(plan) {
     protectedFieldCheck: buildProtectedFieldCheck(plan.crmPayloads?.person?.payload),
     personPayloadValidation: plan.crmPayloads?.person?.payloadValidation,
     outboundEventPreview: plan.outboundEvent?.planned,
-    workspaceUser: sanitizeWorkspaceUser(plan.workspaceUser)
+    workspaceUser: sanitizeWorkspaceUser(plan.workspaceUser),
+    workspaceMember: plan.workspaceMember ?? null
   };
 }
 
@@ -295,6 +296,7 @@ function toCommitResponse({ plan, crmSync, auditLogs, workspaceUser }) {
       ids: auditLogs.map((record) => record.id)
     },
     workspaceUser: sanitizeWorkspaceUser(workspaceUser ?? plan.workspaceUser),
+    workspaceMember: plan.workspaceMember ?? null,
     protectedFieldCheck: buildProtectedFieldCheck(plan.crmPayloads?.person?.payload),
     personPayloadValidation: plan.crmPayloads?.person?.payloadValidation,
     skippedRelationships: crmSync.skippedRelationships ?? []

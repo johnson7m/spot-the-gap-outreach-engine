@@ -18,7 +18,8 @@
     "quick-capture:dry": "node scripts/runQuickCaptureDryRun.js",
     "quick-capture:live": "node scripts/runQuickCaptureLiveTest.js",
     "quick-capture:retry-failed": "node scripts/retryQuickCaptureFailedOperations.js",
-    "quick-capture:inspect-latest": "node scripts/inspectLatestQuickCaptureCommit.js"
+    "quick-capture:inspect-latest": "node scripts/inspectLatestQuickCaptureCommit.js",
+    "quick-capture:inspect-metadata": "node scripts/inspectQuickCaptureMetadata.js"
   },
   "keywords": [
     "visible-gap",

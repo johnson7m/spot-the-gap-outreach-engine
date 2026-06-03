@@ -12,6 +12,7 @@ import {
   mapWorkspaceUserToOutboundActorContext,
   sanitizeWorkspaceUser
 } from '../../utils/outboundActorMapper.js';
+import { resolveWorkspaceMemberForQuickCapture } from '../../integrations/twenty/workspaceMemberResolver.js';
 import { normalizeQuickCaptureLead } from './leadIntakeWorkflow.js';
 
 export async function processQuickCaptureLead({
@@ -32,6 +33,13 @@ export async function processQuickCaptureLead({
     log
   });
   const personFieldOptions = getPersonFieldOptions(schemaResult.schema);
+  const companyFieldOptions = getObjectFieldOptions(schemaResult.schema, 'company');
+  const taskFieldOptions = getObjectFieldOptions(schemaResult.schema, 'task');
+  const workspaceMemberResolution = await resolveWorkspaceMemberForQuickCapture({
+    config: config.twenty,
+    workspaceUser,
+    log
+  });
   const cadence = planInitialCadence({
     outboundPipelineType: normalizedLead.outboundPipelineType,
     availablePipelineTypes: personFieldOptions.outboundPipelineType,
@@ -52,7 +60,10 @@ export async function processQuickCaptureLead({
     lead: leadForScoring,
     scores,
     cadence,
-    supportedPersonFields: personFieldOptions.supportedFields
+    supportedPersonFields: personFieldOptions.supportedFields,
+    supportedCompanyFields: companyFieldOptions.supportedFields,
+    supportedTaskFields: taskFieldOptions.supportedFields,
+    workspaceMember: workspaceMemberResolution.workspaceMember
   });
   const personPayloadValidation = validateQuickCapturePersonPayload({
     payload: payloads.person.payload,
@@ -87,6 +98,7 @@ export async function processQuickCaptureLead({
     cadence,
     crmPayloads: payloads,
     workspaceUser: sanitizeWorkspaceUser(workspaceUser),
+    workspaceMember: workspaceMemberResolution.workspaceMember,
     outboundEvent: {
       planned: outboundEvent,
       persisted: persistedOutboundEvent
@@ -95,9 +107,21 @@ export async function processQuickCaptureLead({
     schemaWarnings: schemaResult.warnings,
     warnings: [
       ...schemaResult.warnings,
+      ...workspaceMemberResolution.warnings,
       ...(schemaResult.validation?.warnings ?? []),
       ...(schemaResult.validation?.errors ?? []).map((error) => `Outbound schema issue: ${error}`),
-      ...buildPersonPayloadWarnings({ lead: leadForScoring, personPayloadValidation })
+      ...buildPersonPayloadWarnings({
+        lead: leadForScoring,
+        personPayloadValidation,
+        payloads,
+        workspaceMemberResolution
+      }),
+      ...buildCompanyPayloadWarnings({
+        lead: leadForScoring,
+        payloads,
+        workspaceMemberResolution
+      }),
+      ...buildTaskPayloadWarnings({ workspaceUser, workspaceMemberResolution, payloads })
     ]
   };
 }
@@ -155,7 +179,8 @@ async function discoverOutboundSchema({ config, schemaOverride, log }) {
     const schema = await createTwentyMetadataClient(config.twenty, log).discoverSchema([
       'person',
       'company',
-      'task'
+      'task',
+      'workspaceMember'
     ]);
 
     return {
@@ -190,18 +215,40 @@ function getPersonFieldOptions(schema) {
   };
 }
 
+function getObjectFieldOptions(schema, objectName) {
+  const objectMetadata = schema ? findObject(schema, objectName) : null;
+  const fieldsByName = objectMetadata?.fieldsByName ?? {};
+
+  return {
+    supportedFields: new Set(Object.keys(fieldsByName)),
+    fieldsByName
+  };
+}
+
 function getOptions(field) {
   return (field?.options ?? []).map((option) =>
     typeof option === 'string' ? option : option.value
   );
 }
 
-function buildPersonPayloadWarnings({ lead, personPayloadValidation }) {
+function buildPersonPayloadWarnings({
+  lead,
+  personPayloadValidation,
+  payloads,
+  workspaceMemberResolution
+}) {
   const warnings = [];
+  const personPayload = payloads.person?.payload ?? {};
 
   if (lead.phone && !personPayloadValidation.sanitizedRequestPayload?.phones) {
     warnings.push(
-      'Person phone omitted because Twenty PHONES writes require country code and calling code; capture E.164 +1 numbers to write phones safely.'
+      'Person phone omitted because Twenty PHONES writes require a valid US +1 phone shape with country and calling code context.'
+    );
+  }
+
+  if (workspaceMemberResolution.workspaceMember && !Object.hasOwn(personPayload, 'ownerId')) {
+    warnings.push(
+      'Person owner omitted because Twenty Person.owner was not confirmed in metadata.'
     );
   }
 
@@ -210,4 +257,51 @@ function buildPersonPayloadWarnings({ lead, personPayloadValidation }) {
   }
 
   return warnings;
+}
+
+function buildCompanyPayloadWarnings({ lead, payloads, workspaceMemberResolution }) {
+  const warnings = [];
+  const companyPayload = payloads.company?.payload ?? {};
+
+  if (lead.companySegment && !Object.hasOwn(companyPayload, 'segment')) {
+    warnings.push(
+      `Company segment "${lead.companySegment}" omitted because Twenty Company.segment was not confirmed in metadata.`
+    );
+  }
+
+  if (lead.companyIndustry && !Object.hasOwn(companyPayload, 'industry')) {
+    warnings.push(
+      `Company industry "${lead.companyIndustry}" omitted because Twenty Company.industry was not confirmed in metadata.`
+    );
+  }
+
+  if (
+    payloads.company &&
+    workspaceMemberResolution.workspaceMember &&
+    !Object.hasOwn(companyPayload, 'accountOwnerId')
+  ) {
+    warnings.push(
+      'Company owner omitted because Twenty Company.accountOwner was not confirmed in metadata.'
+    );
+  }
+
+  return warnings;
+}
+
+function buildTaskPayloadWarnings({ workspaceUser, workspaceMemberResolution, payloads }) {
+  if (
+    !workspaceUser?.authenticated ||
+    !payloads.task ||
+    workspaceMemberResolution.warnings.length > 0
+  ) {
+    return [];
+  }
+
+  if (workspaceMemberResolution.workspaceMember) {
+    return Object.hasOwn(payloads.task.payload ?? {}, 'assigneeId')
+      ? []
+      : ['Task assignee omitted because Twenty Task.assignee was not confirmed in metadata.'];
+  }
+
+  return ['Task assignee omitted because no Twenty workspace member was resolved.'];
 }

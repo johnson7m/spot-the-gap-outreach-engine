@@ -1,6 +1,7 @@
 # CRM Schema Gap Analysis
 
-Metadata inspected: Twenty CRM metadata API on 2026-05-27.
+Metadata inspected: Twenty CRM metadata API on 2026-05-27, with Quick Capture
+Company/owner/assignee mapping rechecked on 2026-06-03.
 
 This document identifies what the current Twenty schema can support and what
 should be added before building outbound queues, cadence workflows, enrichment,
@@ -213,6 +214,39 @@ Recommended assessment-to-opportunity rule:
 
 The metadata inspection confirmed all expected API names in camelCase.
 
+## Confirmed Company And Assignment Fields
+
+The 2026-06-03 metadata inspection confirmed these Quick Capture mappings:
+
+Company:
+
+| Field | Type | Values / shape |
+| --- | --- | --- |
+| `segment` | `SELECT` | `SMALL_BUSINESS`, `COMMERCIAL`, `MID_MARKET`, `ENTERPRISE` |
+| `industry` | `MULTI_SELECT` | `INFORMATION_TECHNOLOGY_IT`, `FINANCIALS`, `CONSUMER_DISCRETIONARY`, `CONSUMER_STAPLES`, `INDUSTRIALS`, `COMMUNICATION_SERVICES`, `ENERGY`, `MATERIALS`, `UTILITIES`, `REAL_ESTATE` |
+| `accountOwner` | `RELATION` | REST payload field: `accountOwnerId`. |
+
+Person:
+
+| Field | Type | Values / shape |
+| --- | --- | --- |
+| `owner` | `RELATION` | REST payload field: `ownerId`. |
+
+Task:
+
+| Field | Type | Values / shape |
+| --- | --- | --- |
+| `assignee` | `RELATION` | REST payload field: `assigneeId`. |
+
+Workspace member lookup:
+
+| Object | Matching field |
+| --- | --- |
+| `workspaceMember` | Match `workspaceMember.userEmail` to the authenticated workspace profile email. |
+
+If the workspace member match fails, Quick Capture omits owner/assignee fields
+and returns warnings. No schema migration is needed for this mapping.
+
 ### Optional Later Fields
 
 | Field | Type | Reason to defer |
@@ -243,6 +277,8 @@ Schema impact:
 
 - No new CRM field is required for this failure.
 - The Company payload shape remains minimal: `name` and `domainName`.
+- Quick Capture may now add `segment`, `industry`, and `accountOwnerId` only
+  when metadata confirms the fields and input/member data is available.
 - The failure is treated as transport/provider instability, not a schema gap.
 
 Recovery approach:

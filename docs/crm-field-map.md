@@ -10,6 +10,7 @@ Read-only metadata discovery confirmed these core objects:
 - `company` / `companies`
 - `task` / `tasks`
 - `opportunity` / `opportunities`
+- `workspaceMember` / `workspaceMembers`
 
 Current schema note:
 
@@ -24,6 +25,7 @@ Current schema note:
 | `person.email` | `emails` | `EMAILS` | Yes | Primary dedupe key. |
 | `person.linkedinUrl` | `linkedinLink` | `LINKS` | No | Future enrichment/outreach field. |
 | `person.role` | `jobTitle` | `TEXT` | No | Standard job title. |
+| workspace owner | `owner` | `RELATION` | Quick Capture only | REST payload shape confirmed as `ownerId` when workspace email matches a Twenty workspace member. |
 | `assessment.completed` | `assessmentCompleted` | `BOOLEAN` | Yes | Custom field. Set to `true` after successful assessment intake. |
 | `score.score` | `assessmentScore` | `NUMBER` | Yes | Custom field. Stores 0-100 website-compatible score. |
 | `submittedAt` | `lastTouchDate` | `DATE` | Yes | Custom field. Date-only value. |
@@ -81,6 +83,9 @@ The corrected `DISQUALIFIED_NURTURE` value was confirmed in metadata on 2026-05-
 | --- | --- | --- | --- | --- |
 | `company.name` | `name` | `TEXT` | Yes | Fallback dedupe key when no domain exists. |
 | `company.domain` / `company.website` | `domainName` | `LINKS` | Preferred | Current website assessment does not submit a company URL. |
+| quick capture segment | `segment` | `SELECT` | No | Quick Capture only. Omitted with a warning when metadata does not confirm the field. |
+| quick capture industry | `industry` | `MULTI_SELECT` | No | Quick Capture only. Payload shape is an array of confirmed values. |
+| workspace owner | `accountOwner` | `RELATION` | No | REST payload shape confirmed as `accountOwnerId` when workspace email matches a Twenty workspace member. |
 | `score.score` | `operationalMaturityScore` | `RATING` | No | Custom rating field with `RATING_1` through `RATING_5`. |
 | person/company link | `people` | `RELATION` | Future | Requires Person ID after upsert. |
 
@@ -88,6 +93,28 @@ Company duplicate criteria discovered:
 
 - `name`
 - `domainNamePrimaryLinkUrl`
+
+Company Quick Capture values confirmed on 2026-06-03:
+
+`segment` values:
+
+- `SMALL_BUSINESS`
+- `COMMERCIAL`
+- `MID_MARKET`
+- `ENTERPRISE`
+
+`industry` values:
+
+- `INFORMATION_TECHNOLOGY_IT`
+- `FINANCIALS`
+- `CONSUMER_DISCRETIONARY`
+- `CONSUMER_STAPLES`
+- `INDUSTRIALS`
+- `COMMUNICATION_SERVICES`
+- `ENERGY`
+- `MATERIALS`
+- `UTILITIES`
+- `REAL_ESTATE`
 
 ## Tasks
 
@@ -97,6 +124,7 @@ Company duplicate criteria discovered:
 | task body | `bodyV2` | `RICH_TEXT` | Yes | Includes score, grade, weaknesses, tools, and next action. |
 | task due date | `dueAt` | `DATE_TIME` | Yes | Based on priority. |
 | task status | `status` | `SELECT` | Yes | Uses `TODO` initially. |
+| task assignee | `assignee` | `RELATION` | Quick Capture only | REST payload shape confirmed as `assigneeId` when workspace email matches a Twenty workspace member. |
 | CRM links | `taskTargets` | `RELATION` | Future | Requires resolved Person/Company IDs. |
 
 Task status values discovered:
@@ -104,6 +132,25 @@ Task status values discovered:
 - `TODO`
 - `IN_PROGRESS`
 - `DONE`
+
+## Workspace Members
+
+Quick Capture owner/assignee mapping uses Twenty `workspaceMember` records:
+
+| Field API Name | Type | Notes |
+| --- | --- | --- |
+| `name` | `FULL_NAME` | Display name for the workspace member. |
+| `userEmail` | `TEXT` | Matched against `workspace_profiles.email`. |
+| `userId` | `UUID` | Twenty user id. |
+
+When an authenticated workspace profile email matches `workspaceMember.userEmail`:
+
+- Person owner is sent as `ownerId`.
+- Company owner is sent as `accountOwnerId`.
+- Task assignee is sent as `assigneeId`.
+
+If no match is found, the workflow omits owner/assignee fields, returns warnings,
+and still allows Quick Capture preview/commit to proceed.
 
 ## Opportunities
 
@@ -196,8 +243,10 @@ Quick Capture planning is intentionally separate from the assessment sync. The
 dry-run script builds:
 
 - Person upsert payload with outbound fields when metadata confirms support.
-- Company upsert payload when `companyName` is provided.
-- Task create payload for the first manual cadence action.
+- Company upsert payload when `companyName` is provided, including `segment` and
+  `industry` when confirmed by metadata and provided by the workspace.
+- Task create payload for the first manual cadence action, with `assigneeId`
+  when a matching Twenty workspace member is resolved.
 - Supabase `outbound_events` plan when event persistence is enabled.
 
 Twenty writes are not performed by `npm run quick-capture:dry`.

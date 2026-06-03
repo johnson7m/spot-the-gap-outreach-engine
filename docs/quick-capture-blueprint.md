@@ -28,17 +28,19 @@ Required for MVP:
 - full name
 - company name
 - source
-- user-provided profile URL or source URL
-- why this lead matters
+- at least one contact/context path: user-provided profile URL, email, phone, or
+  a useful note
 - pipeline type
-- assigned rep or default owner
+- authenticated workspace user for owner/assignee resolution when available
 
 Recommended when available:
 
 - job title
 - email
-- phone
+- phone with country/calling-code context
 - company website/domain
+- company segment
+- company industry
 - company LinkedIn URL
 - city/location
 - team size or company size estimate
@@ -79,29 +81,32 @@ Person:
 
 - `name`
 - `emails`, if provided
-- `phones`, if provided
+- `phones`, if provided as a safe US `+1` value with country/calling-code
+  context
 - `linkedinLink`, if user provided
 - `jobTitle`, if provided
 - `company`, after relationship payloads are validated
 - `leadSource`
 - `leadStage`
-- `owner`
+- `ownerId`, when the workspace user's email matches a Twenty `workspaceMember`
 
 Company:
 
 - `name`
 - `domainName`, if available
 - `linkedinLink`, if user provided
-- `industry`, if confidently known
-- `segment`, if confidently known
+- `industry`, if selected from confirmed Twenty values
+- `segment`, if selected from confirmed Twenty values
 - `idealCustomerProfile`, if manually set or later enriched
-- `accountOwner`, if assigned
+- `accountOwnerId`, when the workspace user's email matches a Twenty
+  `workspaceMember`
 
 Task:
 
 - initial first-touch task
 - due date based on cadence day 1
-- assignee
+- `assigneeId`, when the workspace user's email matches a Twenty
+  `workspaceMember`
 - body with source, reason captured, proposed angle, and required manual action
 
 Note:
@@ -124,11 +129,13 @@ Supabase:
 | `sourceUrl` | Yes for LinkedIn capture | Person `linkedinLink` or event payload | User-provided only. |
 | `jobTitle` | No | Person `jobTitle` | Useful for personalization. |
 | `email` | No | Person `emails` | Strongest dedupe when present. |
-| `phone` | No | Person `phones` | Optional. |
+| `phone` | No | Person `phones` | Optional. Workspace sends `phoneCountryCode=US` and `phoneCallingCode=+1`; invalid local-only values are omitted with warnings. |
 | `companyWebsite` | No | Company `domainName` | Strong company dedupe. |
+| `companySegment` | No | Company `segment` | Confirmed values: `SMALL_BUSINESS`, `COMMERCIAL`, `MID_MARKET`, `ENTERPRISE`. |
+| `companyIndustry` | No | Company `industry` | Multi-select payload, currently one selected value from confirmed Twenty values. |
 | `pipelineType` | Yes | Person `outboundPipelineType` | `ASSESSMENT_CAMPAIGN`, `RELATIONSHIP_BUILDING`, or `GENERAL_PROSPECT`. |
-| `captureNote` | Yes | Note; Supabase event | Why this lead is worth attention. |
-| `assignedRep` | No | Person `owner`; Task `assignee` | Defaults need approval. |
+| `captureNote` | No | Supabase event; future Note | Useful context. Optional when URL, email, or phone exists. |
+| workspace user email | Automatic | Person `ownerId`; Company `accountOwnerId`; Task `assigneeId` | Resolved server-side through Twenty `workspaceMember.userEmail`. |
 
 Approved `leadSource` values:
 
@@ -184,6 +191,8 @@ message-channel integration later.
 - Capture events should be logged before CRM writes.
 - Rep-visible records should clearly mark test/capture source in notes/tasks
   until live rollout is approved.
+- Owner and assignee matching should be warning-safe: no match means omit the
+  relation-id fields and continue, not fail the capture.
 
 ## Controlled Live Test Guard
 
@@ -256,6 +265,34 @@ browser workspace.
 and CRM audit logs are persisted. Commit still routes through the CRM adapter
 and excludes all protected assessment fields. When a workspace user is
 available, outbound event and CRM audit metadata include sanitized role context.
+
+## Confirmed CRM Mapping Details
+
+Metadata inspection on 2026-06-03 confirmed:
+
+- Company `segment`: `SELECT`
+  - `SMALL_BUSINESS`
+  - `COMMERCIAL`
+  - `MID_MARKET`
+  - `ENTERPRISE`
+- Company `industry`: `MULTI_SELECT`
+  - `INFORMATION_TECHNOLOGY_IT`
+  - `FINANCIALS`
+  - `CONSUMER_DISCRETIONARY`
+  - `CONSUMER_STAPLES`
+  - `INDUSTRIALS`
+  - `COMMUNICATION_SERVICES`
+  - `ENERGY`
+  - `MATERIALS`
+  - `UTILITIES`
+  - `REAL_ESTATE`
+- Person owner relation: `owner`, REST field `ownerId`.
+- Company owner relation: `accountOwner`, REST field `accountOwnerId`.
+- Task assignee relation: `assignee`, REST field `assigneeId`.
+- Workspace member matching source: `workspaceMember.userEmail`.
+
+If any of these fields are unavailable in metadata, Quick Capture omits them and
+returns warnings. It does not send speculative field names.
 
 ## Retry And Recovery Model
 

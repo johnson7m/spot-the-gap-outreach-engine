@@ -67,6 +67,16 @@ The dry run never writes to Twenty. To also persist the planned
 `outbound_events` row in a configured Supabase environment, run with
 `QUICK_CAPTURE_PERSIST_EVENTS=true`.
 
+Quick Capture metadata inspection:
+
+```bash
+npm run quick-capture:inspect-metadata
+```
+
+This confirms Company `segment`/`industry`, Person `owner`, Company
+`accountOwner`, Task `assignee`, and Twenty `workspaceMember` email matching
+before owner/assignee relation-id fields are used.
+
 Controlled Quick Capture live test:
 
 ```bash
@@ -102,6 +112,12 @@ Capture preview/commit. The legacy
 server-configured staging fallback; the browser workspace should not send it.
 Set `WORKSPACE_ALLOWED_ORIGIN` to the deployed workspace origin when browser
 CORS needs to allow the internal app.
+
+Quick Capture accepts optional notes when another context path exists
+(`linkedinUrl`, `email`, or valid phone). Phone writes are US `+1` shaped and
+unsafe phone values are omitted with warnings. Company Segment/Industry and
+owner/assignee fields are written only when Twenty metadata and workspace-member
+matching confirm the exact field shape.
 
 Workspace auth flags:
 

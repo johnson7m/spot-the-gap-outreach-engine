@@ -84,6 +84,12 @@ const FIELD_EXPECTATIONS = {
   }
 };
 
+const REST_RELATION_ID_FIELDS = {
+  ownerId: {
+    metadataField: 'owner'
+  }
+};
+
 export function validateQuickCapturePersonPayload({ payload = {}, lead = {}, schema } = {}) {
   const person = schema ? findObject(schema, 'person') : null;
   const errors = [];
@@ -171,7 +177,23 @@ export function validateQuickCapturePersonPayload({ payload = {}, lead = {}, sch
   }
 
   for (const fieldName of includedFieldNames) {
-    if (!QUICK_CAPTURE_PERSON_FIELDS.includes(fieldName)) {
+    if (QUICK_CAPTURE_PERSON_FIELDS.includes(fieldName)) {
+      continue;
+    }
+
+    const relationIdValidation = validateRestRelationIdField({
+      fieldName,
+      value: payload[fieldName],
+      person
+    });
+
+    if (relationIdValidation.allowed) {
+      fieldReport.push(relationIdValidation.report);
+      pushFieldErrors(errors, fieldName, relationIdValidation.errors);
+      continue;
+    }
+
+    if (!relationIdValidation.known) {
       const message = `Payload includes unapproved Quick Capture Person field "${fieldName}".`;
 
       errors.push({
@@ -179,7 +201,12 @@ export function validateQuickCapturePersonPayload({ payload = {}, lead = {}, sch
         fieldName,
         message
       });
+
+      continue;
     }
+
+    fieldReport.push(relationIdValidation.report);
+    pushFieldErrors(errors, fieldName, relationIdValidation.errors);
   }
 
   return {
@@ -190,6 +217,50 @@ export function validateQuickCapturePersonPayload({ payload = {}, lead = {}, sch
     includedFieldNames,
     dedupeStrategy: lead.dedupe?.strategy ?? null,
     sanitizedRequestPayload: sanitizePayloadForDiagnostics(payload)
+  };
+}
+
+function validateRestRelationIdField({ fieldName, value, person }) {
+  const expectation = REST_RELATION_ID_FIELDS[fieldName];
+
+  if (!expectation) {
+    return {
+      known: false,
+      allowed: false,
+      errors: []
+    };
+  }
+
+  const field = person.fieldsByName?.[expectation.metadataField];
+  const errors = [];
+
+  if (!field) {
+    errors.push(
+      `Payload includes REST relation id "${fieldName}", but field "${expectation.metadataField}" does not exist on Twenty Person.`
+    );
+  } else if (field.type !== 'RELATION') {
+    errors.push(
+      `Payload includes REST relation id "${fieldName}", but field "${expectation.metadataField}" is type ${field.type}, not RELATION.`
+    );
+  }
+
+  if (!isUuid(value)) {
+    errors.push(`Field "${fieldName}" must be a valid UUID relation id.`);
+  }
+
+  return {
+    known: true,
+    allowed: true,
+    errors,
+    report: {
+      fieldName,
+      included: true,
+      exists: Boolean(field),
+      expectedType: 'RELATION_ID',
+      actualType: field?.type ?? null,
+      status: errors.length > 0 ? 'shape_mismatch' : 'included_valid',
+      messages: errors
+    }
   };
 }
 
@@ -374,4 +445,10 @@ function isSafeUrl(value) {
   } catch {
     return false;
   }
+}
+
+function isUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    String(value ?? '')
+  );
 }
