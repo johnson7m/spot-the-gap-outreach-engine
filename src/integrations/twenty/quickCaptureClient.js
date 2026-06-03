@@ -21,6 +21,7 @@ export function createQuickCaptureClient({
   dryRun = true,
   log,
   restClient,
+  relationshipWriter,
   retry = {}
 } = {}) {
   const retryPolicy = normalizeRetryPolicy(retry);
@@ -30,9 +31,11 @@ export function createQuickCaptureClient({
       return executeQuickCaptureOperations({
         lead,
         operations: buildOperationsFromPayloads(payloads),
+        payloads,
         dryRun,
         restClient,
         log,
+        relationshipWriter,
         retryPolicy
       });
     },
@@ -41,9 +44,11 @@ export function createQuickCaptureClient({
       return executeQuickCaptureOperations({
         lead,
         operations: operations.filter(Boolean),
+        payloads: {},
         dryRun,
         restClient,
         log,
+        relationshipWriter,
         retryPolicy
       });
     }
@@ -53,24 +58,14 @@ export function createQuickCaptureClient({
 async function executeQuickCaptureOperations({
   lead,
   operations,
+  payloads,
   dryRun,
   restClient,
   log,
+  relationshipWriter,
   retryPolicy
 }) {
   const operationResults = [];
-  const skippedRelationships = [
-    {
-      key: 'person.company',
-      status: 'skipped',
-      reason: 'Relationship writes remain disabled until Twenty relation payload shape is confirmed.'
-    },
-    {
-      key: 'task.taskTargets',
-      status: 'skipped',
-      reason: 'Relationship writes remain disabled until Twenty relation payload shape is confirmed.'
-    }
-  ];
 
   for (const operation of operations) {
     operationResults.push(
@@ -92,6 +87,14 @@ async function executeQuickCaptureOperations({
     );
   }
 
+  const relationshipResults = await executeQuickCaptureRelationshipOperations({
+    lead,
+    operationResults,
+    payloads,
+    relationshipWriter,
+    dryRun
+  });
+
   return {
     provider: 'twenty',
     status: getExecutionStatus({ dryRun, operations: operationResults }),
@@ -100,12 +103,115 @@ async function executeQuickCaptureOperations({
       ? 'Quick Capture execution is in dry-run mode. No records were written.'
       : 'Quick Capture CRM execution completed with structured operation results.',
     operations: operationResults,
-    skippedRelationships
+    relationshipResults,
+    skippedRelationships: relationshipResults.filter((operation) => operation.status === 'skipped')
   };
 }
 
 function buildOperationsFromPayloads(payloads = {}) {
   return [payloads.company, payloads.person, payloads.task].filter(Boolean);
+}
+
+async function executeQuickCaptureRelationshipOperations({
+  lead,
+  operationResults,
+  payloads,
+  relationshipWriter,
+  dryRun
+}) {
+  const companyId = getOperationRecordId(operationResults.find((operation) => operation.object === 'company'));
+  const personId = getOperationRecordId(operationResults.find((operation) => operation.object === 'person'));
+  const taskId = getOperationRecordId(operationResults.find((operation) => operation.object === 'task'));
+
+  if (!relationshipWriter) {
+    return defaultSkippedRelationshipResults({
+      companyId,
+      personId,
+      taskId,
+      reason: 'Relationship writer is not configured.'
+    });
+  }
+
+  return [
+    await relationshipWriter.linkPersonToCompany({
+      personId,
+      companyId,
+      context: {
+        workflow: 'quick_capture',
+        leadDedupeKey: lead?.dedupe?.key,
+        companyDedupeKey: payloads.company?.dedupeKey,
+        dryRun
+      }
+    }),
+    await relationshipWriter.linkTaskToPerson({
+      taskId,
+      personId,
+      context: {
+        workflow: 'quick_capture',
+        leadDedupeKey: lead?.dedupe?.key,
+        taskDedupeKey: payloads.task?.dedupeKey,
+        dryRun
+      }
+    }),
+    await relationshipWriter.linkTaskToCompany({
+      taskId,
+      companyId,
+      context: {
+        workflow: 'quick_capture',
+        companyDedupeKey: payloads.company?.dedupeKey,
+        taskDedupeKey: payloads.task?.dedupeKey,
+        dryRun
+      }
+    })
+  ];
+}
+
+function defaultSkippedRelationshipResults({ companyId, personId, taskId, reason }) {
+  return [
+    {
+      key: 'person.company',
+      object: 'person',
+      action: 'link_company',
+      status: 'skipped',
+      dedupeKey: `relationship:person:${personId}:company:${companyId}`,
+      payload: {
+        companyId
+      },
+      reason
+    },
+    {
+      key: 'task.taskTargets.person',
+      object: 'taskTarget',
+      action: 'link_task_to_person',
+      status: 'skipped',
+      dedupeKey: `relationship:task:${taskId}:person:${personId}`,
+      payload: {
+        taskId,
+        targetPersonId: personId
+      },
+      reason
+    },
+    {
+      key: 'task.taskTargets.company',
+      object: 'taskTarget',
+      action: 'link_task_to_company',
+      status: 'skipped',
+      dedupeKey: `relationship:task:${taskId}:company:${companyId}`,
+      payload: {
+        taskId,
+        targetCompanyId: companyId
+      },
+      reason
+    }
+  ];
+}
+
+function getOperationRecordId(operation) {
+  if (!operation || operation.status === 'failed') {
+    return null;
+  }
+
+  return operation.response?.id ?? operation.id ?? null;
 }
 
 async function runOperationWithRetry({ operation, lead, execute, dryRun, log, retryPolicy }) {

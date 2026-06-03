@@ -163,6 +163,47 @@ describe('task completion workflow', () => {
     });
   });
 
+  it('keeps task completion succeeded when next Task relationship linking fails', async () => {
+    const result = await completeOutboundTaskWorkflow({
+      input: taskCompletionInput(),
+      config: baseConfig,
+      workspaceUser,
+      crmAdapter: createFakeTaskCompletionCrmAdapter({
+        person: personRecord(),
+        relationshipResults: [
+          {
+            key: 'task.taskTargets.person',
+            object: 'taskTarget',
+            action: 'link_task_to_person',
+            status: 'failed',
+            dedupeKey: 'relationship:task:tasks-next-1:person:people-1',
+            payload: {
+              taskId: 'tasks-next-1',
+              targetPersonId: 'people-1'
+            },
+            error: {
+              message: 'Relationship write failed in test.'
+            }
+          }
+        ]
+      }),
+      correlationId: 'task-completion-test-relationship-failure',
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+
+    expect(result.status).toBe('succeeded');
+    expect(result.crmSync.relationshipResults).toEqual([
+      expect.objectContaining({
+        key: 'task.taskTargets.person',
+        status: 'failed',
+        error: {
+          message: 'Relationship write failed in test.'
+        }
+      })
+    ]);
+    expect(result.crmSync.operations.map((operation) => operation.object)).toEqual(['person', 'task']);
+  });
+
   it('does not create a next task for terminal cadence stages', async () => {
     const result = await completeOutboundTaskWorkflow({
       input: taskCompletionInput({
@@ -375,7 +416,11 @@ function createMockExchange({ body = {}, headers = {}, params = {} } = {}) {
   return { req, res, next };
 }
 
-function createFakeTaskCompletionCrmAdapter({ person, taskOperationStatus = 'succeeded' } = {}) {
+function createFakeTaskCompletionCrmAdapter({
+  person,
+  taskOperationStatus = 'succeeded',
+  relationshipResults = []
+} = {}) {
   return {
     async getPersonById(personId) {
       expect(personId).toBe('people-1');
@@ -432,6 +477,7 @@ function createFakeTaskCompletionCrmAdapter({ person, taskOperationStatus = 'suc
         status: 'succeeded',
         dryRun: false,
         operations,
+        relationshipResults,
         skippedRelationships: [
           {
             key: 'task.taskTargets',

@@ -173,6 +173,8 @@ Implemented audit/event writes:
 - `outbound_events.event_type=task_completed`
 - `outbound_events.event_type=next_task_created`, when a next task is planned
 - `crm_sync_logs` rows for Person update and next Task create/skip/failure
+- optional `crm_sync_logs` rows for next Task relationship linking when
+  feature flags are enabled
 
 Next task dedupe key includes:
 
@@ -180,8 +182,21 @@ Next task dedupe key includes:
 personId + cadenceName + nextCadenceStage + taskType
 ```
 
-Relationship writes remain disabled. Next Task `bodyV2` includes Person ID,
-completed Task ID, cadence context, and the dedupe key.
+Relationship writes remain disabled by default. Next Task `bodyV2` still
+includes Person ID, completed Task ID, cadence context, and the dedupe key as a
+fallback.
+
+When all relationship flags are enabled, task completion also attempts a
+non-blocking Task Target link for the newly created/skipped next Task:
+
+```text
+POST /rest/taskTargets
+{ "taskId": "<next-task-id>", "targetPersonId": "<person-id>" }
+```
+
+If the link fails, task completion still succeeds when the Person update and
+next Task operation succeeded. The failed relationship result is returned as a
+warning and audited in `crm_sync_logs`.
 
 ## Pause And Resume
 

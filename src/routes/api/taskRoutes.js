@@ -101,6 +101,18 @@ function toTaskCompletionResponse(result) {
       responseBody: operation.error?.responseBody,
       payload: operation.payload
     })),
+    relationshipResults: (result.crmSync.relationshipResults ?? []).map((operation) => ({
+      key: operation.key,
+      object: operation.object,
+      action: operation.action,
+      status: operation.status,
+      id: operation.response?.id ?? operation.id,
+      dedupeKey: operation.dedupeKey,
+      payload: operation.payload,
+      reason: operation.reason,
+      error: operation.error?.message,
+      responseBody: operation.error?.responseBody
+    })),
     outboundEvents: {
       persisted: result.outboundEvents.persisted.length > 0,
       ids: result.outboundEvents.persisted.map((event) => event.id),
@@ -120,6 +132,14 @@ function buildTaskCompletionWarnings(result) {
 
   for (const skipped of result.skippedRelationships ?? []) {
     warnings.push(`${skipped.key}: ${skipped.reason}`);
+  }
+
+  for (const operation of result.crmSync.relationshipResults ?? []) {
+    if (operation.status === 'failed') {
+      warnings.push(
+        `Relationship ${operation.key} failed: ${operation.error?.message ?? 'Unknown error'}`
+      );
+    }
   }
 
   if (!result.nextTask) {

@@ -32,7 +32,7 @@ Current schema note:
 | workflow state | `leadstageAuto` | `SELECT` | Yes | Custom field. Assessment sync uses `ASSESSMENT_COMPLETED`. |
 | first-message strategy | `messageAngle` | `TEXT` | Yes | Custom field. Generated deterministically for now; future AI drafts require review. |
 | follow-up date | `nextFollowUpDate` | `DATE` | Yes | Custom field. Based on assessment priority. |
-| company link | `company` | `RELATION` | Future | Requires Company ID after upsert. |
+| company link | `company` / `companyId` | `RELATION` | Feature-flagged | Confirmed REST payload shape: update Person with `companyId` after Person and Company IDs are known. |
 
 ### People Outbound Fields
 
@@ -87,7 +87,7 @@ The corrected `DISQUALIFIED_NURTURE` value was confirmed in metadata on 2026-05-
 | quick capture industry | `industry` | `MULTI_SELECT` | No | Quick Capture only. Payload shape is an array of confirmed values. |
 | workspace owner | `accountOwner` | `RELATION` | No | REST payload shape confirmed as `accountOwnerId` when workspace email matches a Twenty workspace member. |
 | `score.score` | `operationalMaturityScore` | `RATING` | No | Custom rating field with `RATING_1` through `RATING_5`. |
-| person/company link | `people` | `RELATION` | Future | Requires Person ID after upsert. |
+| person/company link | `people` | `RELATION` | Reverse only | Reverse of Person `companyId`; write the Person join column instead. |
 
 Company duplicate criteria discovered:
 
@@ -125,13 +125,28 @@ Company Quick Capture values confirmed on 2026-06-03:
 | task due date | `dueAt` | `DATE_TIME` | Yes | Based on priority. |
 | task status | `status` | `SELECT` | Yes | Uses `TODO` initially. |
 | task assignee | `assignee` | `RELATION` | Quick Capture only | REST payload shape confirmed as `assigneeId` when workspace email matches a Twenty workspace member. |
-| CRM links | `taskTargets` | `RELATION` | Future | Requires resolved Person/Company IDs. |
+| CRM links | `taskTargets` | `RELATION` | Feature-flagged | Confirmed target rows are created through `taskTargets` with `taskId` plus `targetPersonId` and optionally `targetCompanyId`. |
 
 Task status values discovered:
 
 - `TODO`
 - `IN_PROGRESS`
 - `DONE`
+
+### Confirmed Task Target Payloads
+
+Twenty `taskTarget` metadata confirmed these join-column fields on 2026-06-03:
+
+| Relationship | REST Object | Payload Shape |
+| --- | --- | --- |
+| Task to Person | `taskTargets` | `{ "taskId": "<task-id>", "targetPersonId": "<person-id>" }` |
+| Task to Company | `taskTargets` | `{ "taskId": "<task-id>", "targetCompanyId": "<company-id>" }` |
+
+The engine checks for an existing matching `taskTarget` before creating a new
+one. Relationship writes remain behind:
+
+- `TWENTY_RELATIONSHIP_WRITES_ENABLED`
+- `TWENTY_TASK_TARGET_LINK_ENABLED`
 
 ## Workspace Members
 
@@ -232,9 +247,9 @@ Assessment sync:
 
 Future CRM expansion still needs:
 
-- Relationship resolution after Person/Company writes.
+- Staging validation for feature-flagged relationship writes.
 - Scoped API keys and service permissions.
-- Native relationship write confirmation for task, person, and opportunity links.
+- Opportunity relationship write confirmation for company/contact links.
 - Outbound-specific fields after approval.
 
 ## Quick Capture Dry-Run Payloads
@@ -258,5 +273,5 @@ Controlled live Quick Capture writes require:
 - `LIVE_TEST=true`
 
 The live test path may create/update Person and Company records and create or
-skip a first Task. It does not write protected assessment fields and does not
-write unresolved relationships.
+skip a first Task. It does not write protected assessment fields. Relationship
+writes remain skipped unless the relationship flags are explicitly enabled.

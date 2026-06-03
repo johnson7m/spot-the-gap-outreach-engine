@@ -39,6 +39,9 @@ const envSchema = z.object({
   TWENTY_API_BASE_URL: z.string().url().optional().or(z.literal('')),
   TWENTY_API_KEY: z.string().optional(),
   TWENTY_WORKSPACE_ID: z.string().optional(),
+  TWENTY_RELATIONSHIP_WRITES_ENABLED: booleanFromEnv.default(false),
+  TWENTY_PERSON_COMPANY_LINK_ENABLED: booleanFromEnv.default(false),
+  TWENTY_TASK_TARGET_LINK_ENABLED: booleanFromEnv.default(false),
   QUICK_CAPTURE_MAX_RETRIES: z.coerce.number().int().min(0).default(3),
   QUICK_CAPTURE_RETRY_BASE_MS: z.coerce.number().int().min(0).default(1000),
   OPENAI_API_KEY: z.string().optional(),
@@ -92,7 +95,10 @@ export function loadConfig() {
         parsed.data.TWENTY_API_BASE_URL ||
         'https://api.twenty.com',
       apiKey: parsed.data.TWENTY_API_KEY,
-      workspaceId: parsed.data.TWENTY_WORKSPACE_ID
+      workspaceId: parsed.data.TWENTY_WORKSPACE_ID,
+      relationshipWritesEnabled: parsed.data.TWENTY_RELATIONSHIP_WRITES_ENABLED,
+      personCompanyLinkEnabled: parsed.data.TWENTY_PERSON_COMPANY_LINK_ENABLED,
+      taskTargetLinkEnabled: parsed.data.TWENTY_TASK_TARGET_LINK_ENABLED
     },
     quickCapture: {
       syncEnabled: parsed.data.QUICK_CAPTURE_SYNC_ENABLED,

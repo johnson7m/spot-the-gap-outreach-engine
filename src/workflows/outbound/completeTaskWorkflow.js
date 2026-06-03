@@ -276,7 +276,10 @@ async function appendTaskCompletionCrmAuditLogs({
   const startedAt = new Date().toISOString();
   const finishedAt = startedAt;
 
-  for (const operation of crmSync.operations) {
+  for (const operation of [
+    ...crmSync.operations,
+    ...(crmSync.relationshipResults ?? [])
+  ]) {
     logs.push(
       await store.appendCrmSyncLog({
         assessmentSubmissionId: null,

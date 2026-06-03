@@ -22,6 +22,9 @@ Configuration:
 - `TWENTY_API_KEY`
 - `TWENTY_WORKSPACE_ID`
 - `TWENTY_SYNC_ENABLED`
+- `TWENTY_RELATIONSHIP_WRITES_ENABLED`
+- `TWENTY_PERSON_COMPANY_LINK_ENABLED`
+- `TWENTY_TASK_TARGET_LINK_ENABLED`
 
 Twenty cloud API access uses Bearer authentication:
 
@@ -166,21 +169,91 @@ The Opportunity object does not currently include `source`, `assessmentScore`, `
 
 ## Relationship Mapping Risks
 
-Current metadata-confirmed relationship fields:
+Metadata inspection on 2026-06-03 confirmed these relationship payload shapes:
 
-- `person.company`
-- `task.taskTargets`
-- `opportunity.company`
-- `opportunity.pointOfContact`
+- Person to Company:
 
-The metadata confirms the fields exist, but the exact REST payload shape for setting these relations still needs staging confirmation. Until then, relationship mapping is logged as unresolved and relationship writes remain disabled.
+```text
+PATCH /rest/people/:personId
+{ "companyId": "<company-id>" }
+```
+
+- Task to Person:
+
+```text
+POST /rest/taskTargets
+{ "taskId": "<task-id>", "targetPersonId": "<person-id>" }
+```
+
+- Task to Company, optional when a Company ID is available:
+
+```text
+POST /rest/taskTargets
+{ "taskId": "<task-id>", "targetCompanyId": "<company-id>" }
+```
+
+Supporting metadata:
+
+- `person.company` is `RELATION`, `MANY_TO_ONE`, `joinColumnName=companyId`.
+- `company.people` is the reverse `ONE_TO_MANY` relation.
+- `task.taskTargets` is the Task reverse relation.
+- `taskTarget.task` is `RELATION`, `MANY_TO_ONE`, `joinColumnName=taskId`.
+- `taskTarget.targetPerson` is `MORPH_RELATION`, `MANY_TO_ONE`,
+  `joinColumnName=targetPersonId`.
+- `taskTarget.targetCompany` is `MORPH_RELATION`, `MANY_TO_ONE`,
+  `joinColumnName=targetCompanyId`.
+- `task.assignee` remains `RELATION`, `MANY_TO_ONE`,
+  `joinColumnName=assigneeId`.
+- `noteTarget` has equivalent `noteId`, `targetPersonId`, and
+  `targetCompanyId` shapes for future notes.
+
+Relationship writes are feature-flagged:
+
+```bash
+TWENTY_RELATIONSHIP_WRITES_ENABLED=false
+TWENTY_PERSON_COMPANY_LINK_ENABLED=false
+TWENTY_TASK_TARGET_LINK_ENABLED=false
+```
+
+When flags are disabled, relationship operations return structured `skipped`
+results. When flags are enabled, relationship writes run after core CRM writes:
+
+- Quick Capture links Person to Company after both core operations succeed.
+- Quick Capture links Task to Person and, when possible, Task to Company after
+  the Task operation succeeds.
+- Task completion links the next Task to the Person after the Task create/skip
+  succeeds.
+
+Relationship failures do not fail the full workflow. They return warnings,
+structured relationship results, and `crm_sync_logs` audit rows.
 
 Potential risks:
 
-- Twenty may expect relation IDs through join-column field names rather than nested objects.
-- Task targets may require a polymorphic relation payload.
-- Opportunity contact/company links may need existing record IDs from prior operations.
-- Partial relationship writes could create confusing CRM links if attempted without confirmation.
+- Duplicate Task Target rows could clutter Twenty if idempotency checks regress.
+- Partial relationship writes could still create confusing CRM links if the
+  wrong IDs are supplied by a test command.
+- Opportunity contact/company relationship writes remain out of scope for this
+  pass.
+
+Dry-run diagnostics:
+
+```bash
+npm run twenty:relationships:test
+```
+
+Live relationship test, after selecting known fake/test records:
+
+```bash
+TWENTY_SYNC_ENABLED=true \
+TWENTY_RELATIONSHIP_WRITES_ENABLED=true \
+TWENTY_PERSON_COMPANY_LINK_ENABLED=true \
+TWENTY_TASK_TARGET_LINK_ENABLED=true \
+LIVE_TEST=true \
+TEST_PERSON_ID=<fake-person-id> \
+TEST_COMPANY_ID=<fake-company-id> \
+TEST_TASK_ID=<fake-task-id> \
+npm run twenty:relationships:test
+```
 
 ## Rollback And Manual Cleanup
 

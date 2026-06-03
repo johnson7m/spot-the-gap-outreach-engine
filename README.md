@@ -87,6 +87,27 @@ The live script validates that the sample lead is obviously fake/test data,
 prints planned payloads before execution, writes through the CRM adapter, and
 leaves protected assessment fields untouched.
 
+Relationship payload diagnostics:
+
+```bash
+npm run twenty:relationships:test
+```
+
+This defaults to dry-run and prints confirmed metadata plus planned payloads for
+Person-to-Company and Task target links. Live relationship writes require all
+relationship flags plus explicit fake/test record IDs:
+
+```bash
+TWENTY_SYNC_ENABLED=true
+TWENTY_RELATIONSHIP_WRITES_ENABLED=true
+TWENTY_PERSON_COMPANY_LINK_ENABLED=true
+TWENTY_TASK_TARGET_LINK_ENABLED=true
+LIVE_TEST=true
+TEST_PERSON_ID=<fake-person-id>
+TEST_COMPANY_ID=<fake-company-id>
+TEST_TASK_ID=<fake-task-id>
+```
+
 Workspace Quick Capture API:
 
 ```text
@@ -125,6 +146,17 @@ unsafe phone values are omitted with warnings. Company Segment/Industry and
 owner/assignee fields are written only when Twenty metadata and workspace-member
 matching confirm the exact field shape.
 
+Relationship writes are disabled by default. When all relationship flags are
+enabled, Quick Capture attempts non-blocking links after core CRM writes:
+
+- Person to Company through `companyId`
+- Task to Person through `taskTargets.targetPersonId`
+- Task to Company through `taskTargets.targetCompanyId`, when a Company ID is
+  available
+
+Relationship failures produce warnings and audit rows but do not fail an
+otherwise successful Quick Capture commit.
+
 Task completion endpoint:
 
 ```text
@@ -137,7 +169,8 @@ fields, creates or skips one next Task according to the cadence rules, writes
 persistence is enabled. It requires Supabase workspace JWT auth and role
 `admin`, `operator`, or `rep`. It does not automate LinkedIn actions and does
 not require relationship writes; next Task bodies include Person ID and cadence
-context until `taskTargets` linking is enabled.
+context as a fallback. When relationship flags are enabled, the engine also
+attempts a non-blocking `taskTargets.targetPersonId` link for the next Task.
 
 Workspace queue endpoints:
 

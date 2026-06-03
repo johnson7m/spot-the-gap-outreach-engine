@@ -317,6 +317,8 @@ write to Twenty. Commit always excludes protected assessment fields.
 Commit may still proceed with warnings when optional Quick Capture fields cannot
 be safely mapped. Examples: invalid phone omitted, owner match not found,
 assignee match not found, or Company Segment/Industry unavailable in metadata.
+Relationship writes are optional and feature-flagged; failed relationship
+results return warnings and do not fail an otherwise successful commit.
 
 Request:
 
@@ -367,6 +369,22 @@ Response:
         "operation": "quick_capture_person_upsert",
         "status": "succeeded",
         "provider": "twenty"
+      }
+    ],
+    "relationshipResults": [
+      {
+        "key": "person.company",
+        "object": "person",
+        "action": "update",
+        "status": "succeeded",
+        "id": "twenty-person-id"
+      },
+      {
+        "key": "task.taskTargets.person",
+        "object": "taskTarget",
+        "action": "create",
+        "status": "succeeded",
+        "id": "twenty-task-target-id"
       }
     ],
     "workspaceUser": {
@@ -652,9 +670,12 @@ Next task dedupe key:
 personId + cadenceName + nextCadenceStage + taskType
 ```
 
-Relationship writes remain disabled. The next Task body includes Person ID,
-completed Task ID, cadence context, and the dedupe key so the workspace/operator
-can identify the associated record without `taskTargets`.
+Relationship writes remain disabled by default. The next Task body includes
+Person ID, completed Task ID, cadence context, and the dedupe key so the
+workspace/operator can identify the associated record without `taskTargets`.
+When relationship flags are enabled, the engine also attempts a Task Target link
+for the next Task. Link failures are returned in `relationshipResults` and
+warnings without failing the core task completion response.
 
 Response:
 
@@ -691,6 +712,15 @@ Response:
       "persisted": true,
       "ids": ["task-completed-event-id", "next-task-created-event-id"]
     },
+    "relationshipResults": [
+      {
+        "key": "task.taskTargets.person",
+        "object": "taskTarget",
+        "action": "create",
+        "status": "succeeded",
+        "id": "twenty-task-target-id"
+      }
+    ],
     "auditLogs": {
       "persisted": true,
       "ids": ["person-update-log-id", "task-create-log-id"]

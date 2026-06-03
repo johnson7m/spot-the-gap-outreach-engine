@@ -5,6 +5,7 @@ import { createPeopleClient } from './peopleClient.js';
 import { buildAssessmentCrmPayloads } from './payloadBuilders.js';
 import { createQuickCaptureClient } from './quickCaptureClient.js';
 import { validateTwentyRelationships } from './relationshipValidator.js';
+import { createTwentyRelationshipWriter } from './relationshipWriter.js';
 import { createTwentyRestClient } from './restClient.js';
 import { validateTwentySchema } from './schemaValidator.js';
 import { createTaskClient } from './taskClient.js';
@@ -23,10 +24,19 @@ export function createTwentyProvider({
   const companyClient = createCompanyClient({ dryRun, log, restClient: twentyRestClient });
   const taskClient = createTaskClient({ dryRun, log, restClient: twentyRestClient });
   const opportunityClient = createOpportunityClient({ dryRun, log, restClient: twentyRestClient });
+  const relationshipWriter = createTwentyRelationshipWriter({
+    config,
+    dryRun,
+    restClient: twentyRestClient,
+    metadataClient,
+    schemaOverride,
+    log
+  });
   const quickCaptureClient = createQuickCaptureClient({
     dryRun,
     log,
     restClient: twentyRestClient,
+    relationshipWriter,
     retry: {
       maxRetries: quickCapture.maxRetries,
       baseMs: quickCapture.retryBaseMs
@@ -204,6 +214,13 @@ export function createTwentyProvider({
         );
       }
 
+      const relationshipResults = await syncTaskCompletionRelationships({
+        relationshipWriter,
+        personUpdate,
+        nextTask,
+        operations
+      });
+
       return {
         provider: 'twenty',
         status: getExecutionStatus({ dryRun, operations }),
@@ -212,7 +229,8 @@ export function createTwentyProvider({
           ? 'Twenty CRM task completion execution is in dry-run mode. No records were written.'
           : 'Twenty CRM task completion execution completed with structured operation results.',
         operations,
-        skippedRelationships: taskCompletionSkippedRelationships()
+        relationshipResults,
+        skippedRelationships: relationshipResults.filter((operation) => operation.status === 'skipped')
       };
     }
   };
@@ -230,6 +248,49 @@ function taskCompletionSkippedRelationships() {
       status: 'skipped',
       reason: 'Relationship writes remain disabled; next task body includes Person ID and cadence context.'
     }
+  ];
+}
+
+async function syncTaskCompletionRelationships({
+  relationshipWriter,
+  personUpdate,
+  nextTask,
+  operations
+}) {
+  const taskOperation = operations.find((operation) => operation.object === 'task');
+  const taskId = taskOperation?.response?.id ?? taskOperation?.id ?? null;
+  const personId = personUpdate?.id ?? null;
+
+  if (!nextTask) {
+    return [
+      {
+        key: 'task.taskTargets.person',
+        object: 'taskTarget',
+        action: 'link_task_to_person',
+        status: 'skipped',
+        dedupeKey: `relationship:task:${taskId}:person:${personId}`,
+        payload: {
+          taskId,
+          targetPersonId: personId
+        },
+        reason: 'No next task was created for this cadence transition.'
+      }
+    ];
+  }
+
+  if (!relationshipWriter) {
+    return taskCompletionSkippedRelationships();
+  }
+
+  return [
+    await relationshipWriter.linkTaskToPerson({
+      taskId,
+      personId,
+      context: {
+        workflow: 'task_completion',
+        nextTaskDedupeKey: nextTask.dedupeKey
+      }
+    })
   ];
 }
 

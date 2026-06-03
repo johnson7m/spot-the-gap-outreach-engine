@@ -203,7 +203,7 @@ export async function handleQuickCaptureCommit(
       successEnvelope({
         correlationId: req.correlationId,
         data: toCommitResponse({ plan, crmSync, auditLogs, workspaceUser: req.workspaceUser }),
-        warnings: plan.warnings
+        warnings: [...plan.warnings, ...buildRelationshipWarnings(crmSync.relationshipResults)]
       })
     );
   } catch (error) {
@@ -291,6 +291,7 @@ function toCommitResponse({ plan, crmSync, auditLogs, workspaceUser }) {
       diagnostics: operation.error?.diagnostics,
       payloadValidation: operation.payloadValidation
     })),
+    relationshipResults: (crmSync.relationshipResults ?? []).map(toRelationshipResponse),
     auditLogs: {
       persisted: auditLogs.length > 0,
       ids: auditLogs.map((record) => record.id)
@@ -300,6 +301,23 @@ function toCommitResponse({ plan, crmSync, auditLogs, workspaceUser }) {
     protectedFieldCheck: buildProtectedFieldCheck(plan.crmPayloads?.person?.payload),
     personPayloadValidation: plan.crmPayloads?.person?.payloadValidation,
     skippedRelationships: crmSync.skippedRelationships ?? []
+  };
+}
+
+function toRelationshipResponse(operation) {
+  return {
+    key: operation.key,
+    object: operation.object,
+    action: operation.action,
+    status: operation.status,
+    id: operation.response?.id ?? operation.id,
+    dedupeKey: operation.dedupeKey,
+    payload: operation.payload,
+    reason: operation.reason,
+    error: operation.error?.message,
+    httpStatus: operation.error?.httpStatus,
+    responseBody: operation.error?.responseBody,
+    metadataValidation: operation.metadataValidation
   };
 }
 
@@ -366,7 +384,10 @@ async function appendQuickCaptureCrmAuditLogs({ store, plan, crmSync }) {
   const startedAt = new Date().toISOString();
   const finishedAt = startedAt;
 
-  for (const operation of crmSync.operations) {
+  for (const operation of [
+    ...crmSync.operations,
+    ...(crmSync.relationshipResults ?? [])
+  ]) {
     logs.push(
       await store.appendCrmSyncLog({
         assessmentSubmissionId: null,
@@ -394,6 +415,18 @@ async function appendQuickCaptureCrmAuditLogs({ store, plan, crmSync }) {
   }
 
   return logs;
+}
+
+function buildRelationshipWarnings(relationshipResults = []) {
+  return relationshipResults
+    .filter((operation) => ['failed', 'skipped'].includes(operation.status))
+    .map((operation) => {
+      if (operation.status === 'failed') {
+        return `Relationship ${operation.key} failed: ${operation.error?.message ?? 'Unknown error'}`;
+      }
+
+      return `Relationship ${operation.key} skipped: ${operation.reason ?? 'No reason returned'}`;
+    });
 }
 
 function normalizeAuditStatus(status) {

@@ -936,6 +936,33 @@ describe('Quick Capture live client planning', () => {
       }
     });
   });
+
+  it('keeps Quick Capture core sync succeeded when relationship writes fail', async () => {
+    const { lead, payloads } = buildQuickCaptureTestPlan();
+    const restClient = createFakeQuickCaptureRestClient();
+    const relationshipWriter = createFailingRelationshipWriter();
+    const client = createQuickCaptureClient({
+      dryRun: false,
+      restClient,
+      relationshipWriter
+    });
+    const result = await client.syncQuickCapture({ lead, payloads });
+
+    expect(result.status).toBe('succeeded');
+    expect(result.operations.map((operation) => operation.status)).toEqual([
+      'succeeded',
+      'succeeded',
+      'succeeded'
+    ]);
+    expect(result.relationshipResults).toHaveLength(3);
+    expect(result.relationshipResults.every((operation) => operation.status === 'failed')).toBe(true);
+    expect(result.relationshipResults[0]).toMatchObject({
+      key: 'person.company',
+      error: {
+        message: 'Relationship write failed in test.'
+      }
+    });
+  });
 });
 
 describe('Quick Capture retry and recovery behavior', () => {
@@ -1527,6 +1554,60 @@ function createFakeQuickCaptureRestClient(seed = {}) {
 
     snapshot() {
       return structuredClone(records);
+    }
+  };
+}
+
+function createFailingRelationshipWriter() {
+  const fail = ({ key, object, action, dedupeKey, payload }) => ({
+    key,
+    object,
+    action,
+    status: 'failed',
+    dedupeKey,
+    payload,
+    error: {
+      message: 'Relationship write failed in test.'
+    }
+  });
+
+  return {
+    async linkPersonToCompany({ personId, companyId }) {
+      return fail({
+        key: 'person.company',
+        object: 'person',
+        action: 'link_company',
+        dedupeKey: `relationship:person:${personId}:company:${companyId}`,
+        payload: {
+          companyId
+        }
+      });
+    },
+
+    async linkTaskToPerson({ taskId, personId }) {
+      return fail({
+        key: 'task.taskTargets.person',
+        object: 'taskTarget',
+        action: 'link_task_to_person',
+        dedupeKey: `relationship:task:${taskId}:person:${personId}`,
+        payload: {
+          taskId,
+          targetPersonId: personId
+        }
+      });
+    },
+
+    async linkTaskToCompany({ taskId, companyId }) {
+      return fail({
+        key: 'task.taskTargets.company',
+        object: 'taskTarget',
+        action: 'link_task_to_company',
+        dedupeKey: `relationship:task:${taskId}:company:${companyId}`,
+        payload: {
+          taskId,
+          targetCompanyId: companyId
+        }
+      });
     }
   };
 }

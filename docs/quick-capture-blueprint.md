@@ -85,7 +85,8 @@ Person:
   context
 - `linkedinLink`, if user provided
 - `jobTitle`, if provided
-- `company`, after relationship payloads are validated
+- `company`, via feature-flagged `companyId` linking after Person and Company
+  writes succeed
 - `leadSource`
 - `leadStage`
 - `ownerId`, when the workspace user's email matches a Twenty `workspaceMember`
@@ -108,6 +109,8 @@ Task:
 - `assigneeId`, when the workspace user's email matches a Twenty
   `workspaceMember`
 - body with source, reason captured, proposed angle, and required manual action
+- `taskTargets`, via feature-flagged Task Target rows after Task and Person IDs
+  are known
 
 Note:
 
@@ -215,8 +218,26 @@ excludes protected assessment fields:
 - `messageAngle`
 - `nextFollowUpDate`
 
-Relationship writes remain skipped until Person/Company/Task relationship
-payload shape is confirmed safely.
+Relationship writes are still disabled by default, but the payload shape is now
+confirmed:
+
+```bash
+TWENTY_RELATIONSHIP_WRITES_ENABLED=false
+TWENTY_PERSON_COMPANY_LINK_ENABLED=false
+TWENTY_TASK_TARGET_LINK_ENABLED=false
+```
+
+When enabled, Quick Capture attempts these non-blocking relationship writes
+after core CRM operations succeed:
+
+- Person to Company: `PATCH /rest/people/:personId` with `companyId`.
+- Task to Person: `POST /rest/taskTargets` with `taskId` and `targetPersonId`.
+- Task to Company: `POST /rest/taskTargets` with `taskId` and
+  `targetCompanyId`, when a Company ID is available.
+
+If a relationship write fails, Quick Capture still returns the core CRM result,
+adds warnings, returns `relationshipResults`, and writes audit rows when
+Supabase persistence is enabled.
 
 ## Workspace API Guard
 
