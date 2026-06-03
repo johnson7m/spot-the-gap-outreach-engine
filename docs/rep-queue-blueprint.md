@@ -1,7 +1,8 @@
 # Rep Queue Blueprint
 
 Rep queues turn CRM state, tasks, assessments, and outbound events into a clear
-daily work surface. This document is design-only.
+daily work surface. The first read-only queue API pass is implemented in the
+outreach engine; UI wiring remains a workspace task.
 
 ## Queue Principles
 
@@ -11,17 +12,48 @@ daily work surface. This document is design-only.
 - Overdue and stale items should be visible without creating duplicate tasks.
 - Queue logic should not change protected assessment fields.
 
+## Implemented Read-Only API
+
+Current endpoints:
+
+- `GET /api/queues/fresh-leads`
+- `GET /api/queues/follow-ups`
+- `GET /api/queues/warm-assessments`
+- `GET /api/queues/stale-recovery`
+- `GET /api/queues/pipeline-review`
+
+All queue endpoints require Supabase workspace JWT auth and role `admin`,
+`operator`, or `rep`. Reps default to `ownerScope=mine`; admins and operators
+can request `ownerScope=all`.
+
+Supported query params:
+
+- `limit`
+- `offset` or `cursor`
+- `ownerScope=mine|all`
+- `dueBefore`
+- `includeOverdue=true|false`
+
+Current data strategy:
+
+- Read People and Tasks from Twenty.
+- Join Tasks to People through explicit Person IDs where available.
+- Fall back to parsing `Person ID: <id>` in task body markdown while
+  relationship writes remain disabled.
+- Return warnings when task relationships or owner/assignee mappings are not
+  available from Twenty.
+- Do not write to CRM, Supabase, or assessment records during queue fetches.
+
 ## Fresh Lead Queue
 
 Purpose: newly captured or researched leads that need first action.
 
 Inclusion logic:
 
-- Person exists.
-- No completed first outbound touch.
-- Not disqualified.
-- Not active client.
-- `assessmentCompleted` is false or empty.
+- Person `outboundPipelineType` exists.
+- Person `cadenceStage=CONNECTION_REQUEST` or `NOT_STARTED`.
+- Person `latestTouchStatus=DRAFTED`.
+- Open task is attached when the API can link one to the Person.
 
 Priority logic:
 
@@ -57,9 +89,10 @@ Purpose: due or overdue cadence and assessment follow-up tasks.
 
 Inclusion logic:
 
-- open Task status `TODO` or `IN_PROGRESS`
+- open Task status `TODO`, `OPEN`, `IN_PROGRESS`, or `NOT_STARTED`
 - `dueAt` is today or overdue
-- Person or Opportunity is not disqualified/closed
+- Person cadence is not terminal
+- Person or parsed task body includes cadence context
 
 Priority logic:
 
@@ -106,9 +139,9 @@ qualification.
 Inclusion logic:
 
 - `assessmentCompleted=true`
-- assessment score exists
+- `leadstageAuto=ASSESSMENT_COMPLETED`
+- `discoveryReadiness=READY`, `REQUESTED`, or `BOOKED`
 - current lead state is not disqualified/closed
-- recent assessment or no completed review task
 
 Priority logic:
 
@@ -143,8 +176,9 @@ Purpose: leads with no recent touch or no next task.
 Inclusion logic:
 
 - not disqualified
-- no open due task, or next touch date is overdue beyond threshold
-- no response/discovery activity in approved window
+- `staleRisk=STALE` or `HIGH`
+- `nextOutboundTouchDate` is older than today
+- `latestTouchStatus=NO_RESPONSE` with an active cadence stage
 
 Suggested thresholds:
 
@@ -183,9 +217,11 @@ Purpose: opportunities and discovery-ready leads that need stage hygiene.
 
 Inclusion logic:
 
-- Opportunity exists, or Person `leadStage=DISCOVERY_READY`
-- no next task, stale opportunity stage, or missing owner
-- not closed won/lost
+- missing key Person fields such as email, LinkedIn URL, company, cadence name,
+  or cadence stage
+- `enrichmentStatus=NEEDS_REVIEW` or `PARTIAL`
+- duplicate warning is present
+- no next task despite a non-terminal cadence
 
 Priority logic:
 

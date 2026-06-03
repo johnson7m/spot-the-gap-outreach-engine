@@ -189,6 +189,19 @@ Workspace MVP:
 - stale leads
 - conversion by source
 
+Implemented queue endpoints can provide early workspace counts for:
+
+- Fresh Lead Queue item count
+- Follow-Up Queue item count
+- Warm Assessment Queue item count
+- Stale Recovery Queue item count
+- Pipeline Review Queue item count
+
+These queue counts are read-only snapshots from Twenty People and Tasks. They
+are useful for the workspace MVP, but durable reporting should still use
+Supabase `outbound_events`, `assessment_submissions`, and `crm_sync_logs` once
+time-windowed conversion metrics are needed.
+
 ## Data Model Recommendations
 
 Use Supabase `outbound_events` as the source of truth for touch counts and

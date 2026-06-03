@@ -93,6 +93,11 @@ Workspace Quick Capture API:
 POST /api/quick-capture/preview
 POST /api/quick-capture/commit
 POST /api/tasks/:id/complete
+GET /api/queues/fresh-leads
+GET /api/queues/follow-ups
+GET /api/queues/warm-assessments
+GET /api/queues/stale-recovery
+GET /api/queues/pipeline-review
 ```
 
 Preview is dry-run only and is intended for the internal
@@ -133,6 +138,23 @@ persistence is enabled. It requires Supabase workspace JWT auth and role
 `admin`, `operator`, or `rep`. It does not automate LinkedIn actions and does
 not require relationship writes; next Task bodies include Person ID and cadence
 context until `taskTargets` linking is enabled.
+
+Workspace queue endpoints:
+
+```text
+GET /api/queues/fresh-leads
+GET /api/queues/follow-ups
+GET /api/queues/warm-assessments
+GET /api/queues/stale-recovery
+GET /api/queues/pipeline-review
+```
+
+These endpoints are read-only. They require Supabase workspace JWT auth and role
+`admin`, `operator`, or `rep`; reps default to `ownerScope=mine`, while admins
+and operators can request `ownerScope=all`. Queue fetches read Twenty People and
+Tasks, return a normalized workspace item shape, and include warnings when task
+relationships must be inferred from task body `Person ID` markers or when
+owner/assignee data is unavailable.
 
 Workspace auth flags:
 

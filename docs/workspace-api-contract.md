@@ -1,8 +1,9 @@
 # Workspace API Contract
 
 This document defines the API surface the `visible-gap-workspace` should use.
-The Quick Capture preview and commit endpoints are implemented. The remaining
-queue, task, duplicate, recovery, and reporting endpoints are still planned.
+Quick Capture preview/commit, task completion, and read-only rep queue endpoints
+are implemented. Duplicate, recovery, reporting, pause, and resume endpoints are
+still planned.
 
 The workspace should call the outreach engine only. The browser should not call
 Twenty or Supabase directly.
@@ -92,19 +93,19 @@ Implemented endpoints:
 
 - `POST /api/quick-capture/preview`
 - `POST /api/quick-capture/commit`
-
-Planned endpoints:
-
-- `GET /api/duplicates`
-- `POST /api/duplicates/:id/merge`
 - `POST /api/tasks/:id/complete`
-- `POST /api/tasks/:id/pause`
-- `POST /api/tasks/:id/resume`
 - `GET /api/queues/fresh-leads`
 - `GET /api/queues/follow-ups`
 - `GET /api/queues/warm-assessments`
 - `GET /api/queues/stale-recovery`
 - `GET /api/queues/pipeline-review`
+
+Planned endpoints:
+
+- `GET /api/duplicates`
+- `POST /api/duplicates/:id/merge`
+- `POST /api/tasks/:id/pause`
+- `POST /api/tasks/:id/resume`
 - `GET /api/recovery/retryable-failures`
 - `POST /api/recovery/:id/retry`
 
@@ -450,104 +451,139 @@ Allowed actions:
 The backend should copy missing fields into the selected surviving record and
 require explicit keep/overwrite choices for conflicts.
 
-## GET /api/queues/fresh-leads
+## GET /api/queues/*
 
-Returns manually captured leads needing first touch.
+The queue endpoints return read-only workspace queue items from Twenty People
+and Tasks. They do not write to Twenty, Supabase, or the assessment workflow.
+
+Implemented endpoints:
+
+- `GET /api/queues/fresh-leads`
+- `GET /api/queues/follow-ups`
+- `GET /api/queues/warm-assessments`
+- `GET /api/queues/stale-recovery`
+- `GET /api/queues/pipeline-review`
+
+Auth:
+
+- Requires `Authorization: Bearer <supabase-access-token>`.
+- Allowed roles: `admin`, `operator`, `rep`.
+- Reps default to `ownerScope=mine`.
+- `admin` and `operator` can request `ownerScope=all`.
+- If Twenty records do not expose owner or assignee email data, the item is
+  returned with a warning because ownership cannot be confidently enforced.
 
 Query params:
 
 ```text
-?limit=50&cursor=<cursor>&assignedRep=<id>&pipelineType=ASSESSMENT_CAMPAIGN
+?limit=50&offset=0&ownerScope=mine&dueBefore=2026-06-03&includeOverdue=true
 ```
 
-Queue criteria draft:
+Supported query params:
 
-- Quick Capture event exists.
-- Person has `cadenceStage=CONNECTION_REQUEST` or `NOT_STARTED`.
-- First-touch task is open.
-- `latestTouchStatus=DRAFTED` or missing.
+- `limit`: 1-100, default 50.
+- `offset` or `cursor`: numeric offset for current page slicing.
+- `ownerScope`: `mine` or `all`; reps are forced to `mine`.
+- `dueBefore`: ISO date used by due/overdue queue logic.
+- `includeOverdue`: default `true`; `false` limits follow-ups to the selected
+  due date.
 
-Response item:
+Response:
 
 ```json
 {
-  "id": "queue-item-id",
-  "personId": "twenty-person-id",
-  "companyId": "twenty-company-id",
-  "taskId": "twenty-task-id",
-  "person": "Taylor Morgan",
-  "title": "VP of Operations",
-  "company": "Example Co",
-  "pipelineType": "ASSESSMENT_CAMPAIGN",
-  "cadenceStage": "CONNECTION_REQUEST",
-  "leadHealthScore": 86,
-  "icpFitScore": 91,
-  "nextAction": "Send assessment-oriented connection request",
-  "dueDate": "2026-05-28T14:00:00.000Z",
-  "outreachAngle": "Invite Taylor to compare operating gaps.",
-  "latestTouchStatus": "DRAFTED",
-  "twentyUrl": "https://app.twenty.com/...",
-  "linkedinUrl": "https://www.linkedin.com/in/example"
+  "ok": true,
+  "correlationId": "request-correlation-id",
+  "data": {
+    "queueName": "Fresh Lead Queue",
+    "queueSlug": "fresh-leads",
+    "items": [
+      {
+        "personId": "twenty-person-id",
+        "taskId": "twenty-task-id",
+        "personName": "Taylor Morgan",
+        "title": "VP of Operations",
+        "companyName": "Example Co",
+        "linkedinUrl": "https://www.linkedin.com/in/example",
+        "email": "taylor@example.com",
+        "outboundPipelineType": "ASSESSMENT_CAMPAIGN",
+        "cadenceName": "ASSESSMENT_CAMPAIGN_V1",
+        "cadenceStage": "CONNECTION_REQUEST",
+        "leadHealthScore": 86,
+        "icpFitScore": 91,
+        "nextOutboundTouchDate": "2026-06-05",
+        "latestTouchChannel": "LINKEDIN",
+        "latestTouchStatus": "DRAFTED",
+        "outreachAngle": "Invite Taylor to compare operating gaps.",
+        "taskTitle": "Send assessment-oriented connection request",
+        "taskDueDate": "2026-06-05",
+        "taskStatus": "TODO",
+        "owner": {
+          "id": "twenty-workspace-member-id",
+          "email": "rep@visiblegap.com",
+          "name": "Visible Gap Rep",
+          "source": "person_owner_and_task_assignee"
+        },
+        "assignedRep": "rep@visiblegap.com",
+        "source": "twenty:person",
+        "warnings": []
+      }
+    ],
+    "count": 1,
+    "limit": 50,
+    "offset": 0,
+    "ownerScope": "mine",
+    "dataSource": "twenty",
+    "warnings": []
+  },
+  "warnings": [],
+  "errors": []
 }
 ```
 
-## GET /api/queues/follow-ups
+Fresh Leads criteria:
 
-Returns due or overdue follow-up tasks.
+- Person `outboundPipelineType` is present.
+- Person `cadenceStage` is `CONNECTION_REQUEST` or `NOT_STARTED`.
+- Person `latestTouchStatus` is `DRAFTED`.
+- Open task is included when a matching task can be found.
 
-Criteria draft:
+Follow-Ups criteria:
 
-- Task status is `TODO` or `IN_PROGRESS`.
-- Task due date is today or earlier.
-- Lead is not paused, completed, disqualified, or booked.
+- Task status is `TODO`, `OPEN`, `IN_PROGRESS`, or `NOT_STARTED`.
+- Task due date is today or overdue according to `dueBefore`.
+- Person cadence is not terminal.
+- Person or parsed task body includes cadence context.
 
-Sorting:
+Warm Assessments criteria:
 
-1. overdue first
-2. highest lead health score
-3. highest ICP fit score
-4. oldest due date
-
-## GET /api/queues/warm-assessments
-
-Returns assessment completions needing review.
-
-Criteria draft:
-
-- `assessmentCompleted=true`
-- assessment completions become warm immediately
-- recent completion or no completed review task
-- high assessment score or discovery-ready CRM state
-- other leads can become warm through response count, response quality,
-  lead evaluation, industry event trigger, company activity, or
-  `leadHealthScore > 50`
+- Person `assessmentCompleted=true`, or
+- Person `leadstageAuto=ASSESSMENT_COMPLETED`, or
+- Person `discoveryReadiness` is `READY`, `REQUESTED`, or `BOOKED`.
 
 Protected assessment fields remain read-only from workspace Quick Capture.
 
-## GET /api/queues/stale-recovery
+Stale Recovery criteria:
 
-Returns leads at risk of being forgotten.
+- Person `staleRisk=STALE` or `HIGH`, or
+- `nextOutboundTouchDate` is older than the current day, or
+- `latestTouchStatus=NO_RESPONSE` with an active cadence stage.
 
-Criteria draft:
+Pipeline Review criteria:
 
-- `staleRisk=HIGH` or `STALE`
-- no inbound/outbound activity for 3 months
-- no response after a full cadence cycle
-- `nextOutboundTouchDate` is in the past
-- no recent completed outbound event
-- not disqualified or completed
+- Missing key fields such as email, LinkedIn URL, company, cadence name, or
+  cadence stage.
+- `enrichmentStatus=NEEDS_REVIEW` or `PARTIAL`.
+- Duplicate warning fields are present.
+- Non-terminal cadence exists but no open next task was found.
 
-## GET /api/queues/pipeline-review
+Relationship fallback:
 
-Returns high-priority records needing sales judgment.
-
-Criteria draft:
-
-- `discoveryReadiness=READY` or `REQUESTED`
-- `leadHealthScore > 75` supports Discovery Ready recommendation
-- Opportunity exists or should be considered
-- assessment completion or positive response signal exists
-- normal path is cold -> warm -> discovery, with manual override allowed
+- Relationship writes remain disabled.
+- When a Task does not expose a direct Person relationship, the queue service
+  parses `Person ID: <id>` from task body markdown.
+- Items using this fallback include a warning so the workspace can display the
+  limitation clearly.
 
 ## POST /api/tasks/:id/complete
 
