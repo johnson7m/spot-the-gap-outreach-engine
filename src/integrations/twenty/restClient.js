@@ -24,6 +24,11 @@ export function createTwentyRestClient(config = {}) {
       return unwrapListResponse(response.data, objectPlural);
     },
 
+    async getRecord(objectPlural, id) {
+      const response = await http.get(`/rest/${objectPlural}/${id}`);
+      return unwrapRecordResponse(response.data, objectPlural);
+    },
+
     async createRecord(objectPlural, payload) {
       try {
         const response = await http.post(`/rest/${objectPlural}`, payload);

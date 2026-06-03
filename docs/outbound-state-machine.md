@@ -1,9 +1,9 @@
 # Outbound State Machine
 
-This document defines the future outbound state machine for Quick Capture,
-rep queues, cadence task generation, warm escalation, stale recovery, and
-discovery readiness. It is documentation-only. No endpoint, database migration,
-or CRM write behavior is implemented by this pass.
+This document defines the outbound state machine for Quick Capture, rep queues,
+cadence task generation, warm escalation, stale recovery, and discovery
+readiness. Quick Capture and task completion now have backend foundations; queue
+read models, pause/resume endpoints, and reporting endpoints remain planned.
 
 ## Source Of Truth
 
@@ -132,6 +132,42 @@ The exact next task depends on `outboundPipelineType`:
   check-in -> discovery ask or completed.
 - `GENERAL_PROSPECT`: connection -> intro -> value touch or pause until a more
   specific pipeline is selected.
+
+Implemented task completion endpoint:
+
+```text
+POST /api/tasks/:id/complete
+```
+
+Implemented behavior:
+
+- requires Supabase workspace JWT and role `admin`, `operator`, or `rep`
+- records `task_completed` in `outbound_events`
+- updates Person cadence and outbound touch summary fields
+- creates or skips exactly one next Task
+- writes `next_task_created` when a next task is planned
+- writes `crm_sync_logs` for Person update and Task create/skip/failure
+- keeps relationship writes disabled
+
+Implemented Assessment Campaign V1 transitions:
+
+| Current `cadenceStage` | New `cadenceStage` | Next task |
+| --- | --- | --- |
+| `CONNECTION_REQUEST` | `INTRO_MESSAGE` | Send assessment positioning message |
+| `INTRO_MESSAGE` | `ASSESSMENT_POSITIONING` | Send assessment positioning message |
+| `ASSESSMENT_POSITIONING` | `ASSESSMENT_SENT` | Send Spot the Gap assessment link |
+| `ASSESSMENT_SENT` | `ASSESSMENT_CHECK_IN` | Check in on Spot the Gap assessment |
+| `ASSESSMENT_CHECK_IN` | `PAUSED` or `COMPLETED` | none |
+
+Implemented Relationship Building V1 transitions:
+
+| Current `cadenceStage` | New `cadenceStage` | Next task |
+| --- | --- | --- |
+| `CONNECTION_REQUEST` | `INTRO_MESSAGE` | Send contextual introduction |
+| `INTRO_MESSAGE` | `VALUE_TOUCH` | Send value touch |
+| `VALUE_TOUCH` | `STRATEGIC_CHECK_IN` | Send strategic check-in |
+| `STRATEGIC_CHECK_IN` | `DISCOVERY_ASK` | Evaluate discovery ask |
+| `DISCOVERY_ASK` | `PAUSED` or `COMPLETED` | none |
 
 ## Warm Escalation Rules
 

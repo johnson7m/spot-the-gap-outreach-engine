@@ -80,12 +80,23 @@ Displayed fields:
 
 Rep actions:
 
-- mark task done
+- mark task complete through `POST /api/tasks/:id/complete`
 - reschedule
 - skip with reason
 - pause cadence
 - add note
 - mark response received
+
+Task completion behavior:
+
+- The workspace sends `personId`, `taskId`, and completion details.
+- The outreach engine records `task_completed` in Supabase.
+- The engine updates Person cadence fields in Twenty.
+- The engine creates or skips one next Task based on cadence stage.
+- Relationship writes can remain disabled; the next Task body includes Person ID
+  and cadence context.
+- Duplicate next tasks are avoided by a dedupe key built from Person ID,
+  cadence name, next cadence stage, and task type.
 
 ## Warm Assessment Queue
 

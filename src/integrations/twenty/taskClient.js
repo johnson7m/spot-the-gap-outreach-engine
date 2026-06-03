@@ -51,5 +51,8 @@ async function executeOperation({ action, dedupeKey, payload, dryRun, log, restC
 
 function taskMatches(record, dedupeKey) {
   const body = record.bodyV2?.markdown ?? record.bodyV2 ?? '';
-  return String(body).includes(`Idempotency key: ${dedupeKey}`);
+  return (
+    String(body).includes(`Idempotency key: ${dedupeKey}`) ||
+    String(body).includes(`Dedupe key: ${dedupeKey}`)
+  );
 }

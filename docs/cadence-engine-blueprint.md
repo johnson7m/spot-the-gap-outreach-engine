@@ -1,7 +1,10 @@
 # Cadence Engine Blueprint
 
-This document defines future cadence behavior for human-controlled outbound.
-It does not implement automation, LinkedIn actions, or CRM writes.
+This document defines cadence behavior for human-controlled outbound. The first
+implemented backend path is `POST /api/tasks/:id/complete`, which records manual
+task completion, updates Person cadence fields, and creates one next Task when
+the cadence rule calls for one. It does not implement automation or LinkedIn
+actions.
 
 ## Core Rules
 
@@ -27,17 +30,27 @@ assessment.
 | Week 1 | `ASSESSMENT_CHECK_IN` | Check whether assessment is still relevant. |
 | Month 1 | `DISCOVERY_ASK` | Ask for a relevant operational conversation if warm enough. |
 
-Suggested stage transitions:
+Implemented stage transitions:
 
 ```text
 NOT_STARTED
   -> CONNECTION_REQUEST
-    -> ASSESSMENT_POSITIONING
+    -> INTRO_MESSAGE
+      -> ASSESSMENT_POSITIONING
       -> ASSESSMENT_SENT
         -> ASSESSMENT_CHECK_IN
-          -> DISCOVERY_ASK
-            -> PAUSED_OR_COMPLETED
+          -> PAUSED_OR_COMPLETED
 ```
+
+Implemented task-completion rules:
+
+| Completed stage | New Person `cadenceStage` | Next task | Due |
+| --- | --- | --- | --- |
+| `CONNECTION_REQUEST` | `INTRO_MESSAGE` | Send assessment positioning message | +2 days |
+| `INTRO_MESSAGE` | `ASSESSMENT_POSITIONING` | Send assessment positioning message | +1 day |
+| `ASSESSMENT_POSITIONING` | `ASSESSMENT_SENT` | Send Spot the Gap assessment link | +1 day |
+| `ASSESSMENT_SENT` | `ASSESSMENT_CHECK_IN` | Check in on Spot the Gap assessment | +3 days |
+| `ASSESSMENT_CHECK_IN` | `PAUSED` or `COMPLETED` | None | n/a |
 
 Task creation rules:
 
@@ -77,16 +90,27 @@ for an assessment CTA.
 | Month 1 | `DISCOVERY_ASK` | Invite an operational conversation when warm enough. |
 | Month 3 | `STRATEGIC_CHECK_IN` | Check for changing priorities. |
 
-Suggested stage transitions:
+Implemented stage transitions:
 
 ```text
 NOT_STARTED
   -> CONNECTION_REQUEST
     -> INTRO_MESSAGE
       -> VALUE_TOUCH
-        -> STRATEGIC_CHECK_IN_OR_DISCOVERY_ASK
+        -> STRATEGIC_CHECK_IN
+          -> DISCOVERY_ASK
           -> COMPLETED_OR_PAUSED
 ```
+
+Implemented task-completion rules:
+
+| Completed stage | New Person `cadenceStage` | Next task | Due |
+| --- | --- | --- | --- |
+| `CONNECTION_REQUEST` | `INTRO_MESSAGE` | Send contextual introduction | +2 days |
+| `INTRO_MESSAGE` | `VALUE_TOUCH` | Send value touch | +14 days |
+| `VALUE_TOUCH` | `STRATEGIC_CHECK_IN` | Send strategic check-in | +30 days |
+| `STRATEGIC_CHECK_IN` | `DISCOVERY_ASK` | Evaluate discovery ask | +60 days |
+| `DISCOVERY_ASK` | `PAUSED` or `COMPLETED` | None | n/a |
 
 Task creation rules:
 
@@ -132,8 +156,32 @@ Examples:
 - Assessment Sent -> generate Assessment Check-In task.
 - Add to Pipeline -> generate Discovery Ask or Pipeline Review task.
 
-The engine should create one next task only after the current task is completed,
-skipped, paused, or explicitly advanced.
+The implemented endpoint creates one next task only after the current task is
+completed. Skipping, pausing, and explicit advancement remain future endpoints.
+
+Implemented Person updates:
+
+- `cadenceName`
+- `cadenceStage`
+- `latestTouchChannel`
+- `latestTouchStatus`
+- `lastOutboundTouchDate`
+- `nextOutboundTouchDate`, when a next task exists
+
+Implemented audit/event writes:
+
+- `outbound_events.event_type=task_completed`
+- `outbound_events.event_type=next_task_created`, when a next task is planned
+- `crm_sync_logs` rows for Person update and next Task create/skip/failure
+
+Next task dedupe key includes:
+
+```text
+personId + cadenceName + nextCadenceStage + taskType
+```
+
+Relationship writes remain disabled. Next Task `bodyV2` includes Person ID,
+completed Task ID, cadence context, and the dedupe key.
 
 ## Pause And Resume
 

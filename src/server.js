@@ -7,13 +7,15 @@ import { loadConfig } from './config/env.js';
 import { logger } from './config/logger.js';
 import { createFixedWindowRateLimiter } from './middleware/rateLimit.js';
 import { createQuickCaptureApiRouter } from './routes/api/quickCaptureRoutes.js';
+import { createTaskApiRouter } from './routes/api/taskRoutes.js';
 import { processAssessmentSubmission } from './workflows/assessmentWorkflow.js';
 import { createCorrelationId } from './utils/idempotency.js';
 
 export function createApp({
   config = loadConfig(),
   appLogger = logger,
-  quickCaptureApiDependencies = {}
+  quickCaptureApiDependencies = {},
+  taskApiDependencies = {}
 } = {}) {
   const app = express();
 
@@ -43,6 +45,15 @@ export function createApp({
       config,
       log: appLogger,
       ...quickCaptureApiDependencies
+    })
+  );
+
+  app.use(
+    '/api/tasks',
+    createTaskApiRouter({
+      config,
+      log: appLogger,
+      ...taskApiDependencies
     })
   );
 

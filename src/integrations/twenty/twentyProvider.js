@@ -160,8 +160,77 @@ export function createTwentyProvider({
       }
 
       return quickCaptureClient.syncQuickCaptureOperations({ lead, operations });
+    },
+
+    async getPersonById(personId) {
+      if (!personId) {
+        return null;
+      }
+
+      if (!config.apiKey || !twentyRestClient) {
+        return null;
+      }
+
+      return twentyRestClient.getRecord('people', personId);
+    },
+
+    async syncTaskCompletion({ personUpdate, nextTask }) {
+      if (!dryRun && !config.apiKey) {
+        return {
+          provider: 'twenty',
+          status: 'blocked_configuration',
+          dryRun: false,
+          reason: 'Twenty CRM live task completion sync is enabled, but TWENTY_API_KEY is missing.',
+          operations: [personUpdate, nextTask].filter(Boolean).map((operation) => ({
+            object: operation.object,
+            action: operation.action,
+            status: 'planned',
+            dedupeKey: operation.dedupeKey,
+            payload: operation.payload
+          })),
+          skippedRelationships: taskCompletionSkippedRelationships()
+        };
+      }
+
+      const operations = [];
+
+      operations.push(
+        await runOperation(() => peopleClient.updatePersonById(personUpdate), personUpdate, new Set())
+      );
+
+      if (nextTask) {
+        operations.push(
+          await runOperation(() => taskClient.createTask(nextTask), nextTask, new Set())
+        );
+      }
+
+      return {
+        provider: 'twenty',
+        status: getExecutionStatus({ dryRun, operations }),
+        dryRun,
+        reason: dryRun
+          ? 'Twenty CRM task completion execution is in dry-run mode. No records were written.'
+          : 'Twenty CRM task completion execution completed with structured operation results.',
+        operations,
+        skippedRelationships: taskCompletionSkippedRelationships()
+      };
     }
   };
+}
+
+function taskCompletionSkippedRelationships() {
+  return [
+    {
+      key: 'person.company',
+      status: 'skipped',
+      reason: 'Relationship writes remain disabled during task completion.'
+    },
+    {
+      key: 'task.taskTargets',
+      status: 'skipped',
+      reason: 'Relationship writes remain disabled; next task body includes Person ID and cadence context.'
+    }
+  ];
 }
 
 function blockedResult({ reason, schemaValidation, relationshipValidation, payloads, status }) {

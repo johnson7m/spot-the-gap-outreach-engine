@@ -551,44 +551,118 @@ Criteria draft:
 
 ## POST /api/tasks/:id/complete
 
-Marks a task complete in the CRM and writes an outbound event.
+Records a completed manual outbound touch, updates the Person cadence state,
+and creates exactly one next cadence task when the cadence rule calls for one.
+This endpoint does not automate LinkedIn actions and does not require
+relationship writes.
+
+Auth:
+
+- Requires `Authorization: Bearer <supabase-access-token>`.
+- Allowed roles: `admin`, `operator`, `rep`.
+- Requires an active `workspace_profiles` row.
 
 Request:
 
 ```json
 {
-  "completionRule": "Connection Request Sent",
-  "completionNote": "Connection request sent manually.",
-  "touchChannel": "LINKEDIN",
-  "touchStatus": "SENT",
-  "completedAt": "2026-05-27T18:00:00.000Z",
-  "generateNextTask": true,
-  "manualOverride": false
+  "personId": "twenty-person-id",
+  "taskId": "twenty-task-id",
+  "completion": {
+    "channel": "LINKEDIN",
+    "touchStatus": "SENT",
+    "messageBody": "Optional message copy.",
+    "notes": "Optional completion note.",
+    "completedAt": "2026-06-03T15:00:00.000Z"
+  }
 }
 ```
 
-Supported completion rules:
+For dry-run/testing contexts, the body may include `personSnapshot` with
+`cadenceName` and `cadenceStage`. Normal live workspace calls should send
+`personId`; the engine fetches the Person through the CRM adapter.
 
-- `Review Fresh Leads`
-- `Lead Research Completed`
-- `Message Sent`
-- `Assessment Sent`
-- `Connection Request Sent`
-- `Add to Pipeline`
+Supported `completion.channel` values:
 
-The backend should generate only one next task at a time according to cadence
-stage. Example: `Connection Request Sent` can generate a Day 3 follow-up task.
+- `LINKEDIN`
+- `EMAIL`
+- `PHONE`
+- `TEXT`
+- `IN_PERSON`
+- `OTHER`
+
+Supported `completion.touchStatus` values:
+
+- `DRAFTED`
+- `SENT`
+- `RESPONDED`
+- `NO_RESPONSE`
+- `BOUNCED`
+- `DECLINED`
+- `COMPLETED`
+
+Person fields updated:
+
+- `cadenceName`
+- `cadenceStage`
+- `latestTouchChannel`
+- `latestTouchStatus`
+- `lastOutboundTouchDate`
+- `nextOutboundTouchDate`, when a next task exists
+
+Next task dedupe key:
+
+```text
+personId + cadenceName + nextCadenceStage + taskType
+```
+
+Relationship writes remain disabled. The next Task body includes Person ID,
+completed Task ID, cadence context, and the dedupe key so the workspace/operator
+can identify the associated record without `taskTargets`.
 
 Response:
 
 ```json
 {
+  "ok": true,
+  "correlationId": "request-correlation-id",
   "data": {
     "taskId": "twenty-task-id",
-    "taskStatus": "DONE",
-    "outboundEventId": "supabase-event-id",
-    "nextTask": {}
-  }
+    "personId": "twenty-person-id",
+    "status": "succeeded",
+    "transition": {
+      "cadenceName": "ASSESSMENT_CAMPAIGN_V1",
+      "oldCadenceStage": "CONNECTION_REQUEST",
+      "newCadenceStage": "INTRO_MESSAGE",
+      "lastOutboundTouchDate": "2026-06-03",
+      "nextOutboundTouchDate": "2026-06-05"
+    },
+    "crmResults": [
+      {
+        "object": "person",
+        "action": "update",
+        "status": "succeeded",
+        "id": "twenty-person-id"
+      },
+      {
+        "object": "task",
+        "action": "create",
+        "status": "succeeded",
+        "id": "next-twenty-task-id"
+      }
+    ],
+    "outboundEvents": {
+      "persisted": true,
+      "ids": ["task-completed-event-id", "next-task-created-event-id"]
+    },
+    "auditLogs": {
+      "persisted": true,
+      "ids": ["person-update-log-id", "task-create-log-id"]
+    },
+    "skippedRelationships": []
+  },
+  "warnings": [],
+  "errors": []
 }
 ```
 

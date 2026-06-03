@@ -92,6 +92,7 @@ Workspace Quick Capture API:
 ```text
 POST /api/quick-capture/preview
 POST /api/quick-capture/commit
+POST /api/tasks/:id/complete
 ```
 
 Preview is dry-run only and is intended for the internal
@@ -118,6 +119,20 @@ Quick Capture accepts optional notes when another context path exists
 unsafe phone values are omitted with warnings. Company Segment/Industry and
 owner/assignee fields are written only when Twenty metadata and workspace-member
 matching confirm the exact field shape.
+
+Task completion endpoint:
+
+```text
+POST /api/tasks/:id/complete
+```
+
+This records a manual outbound touch, updates Person cadence/outbound touch
+fields, creates or skips one next Task according to the cadence rules, writes
+`outbound_events`, and audits CRM operations in `crm_sync_logs` when Supabase
+persistence is enabled. It requires Supabase workspace JWT auth and role
+`admin`, `operator`, or `rep`. It does not automate LinkedIn actions and does
+not require relationship writes; next Task bodies include Person ID and cadence
+context until `taskTargets` linking is enabled.
 
 Workspace auth flags:
 

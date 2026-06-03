@@ -32,6 +32,14 @@ export function createCrmAdapter({
 
     async syncQuickCaptureOperations({ lead, operations }) {
       return crmProvider.syncQuickCaptureOperations({ lead, operations });
+    },
+
+    async getPersonById(personId) {
+      return crmProvider.getPersonById(personId);
+    },
+
+    async syncTaskCompletion({ personUpdate, nextTask }) {
+      return crmProvider.syncTaskCompletion({ personUpdate, nextTask });
     }
   };
 }
