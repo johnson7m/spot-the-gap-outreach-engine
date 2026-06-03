@@ -38,6 +38,7 @@ function printDryRun(result, { persistEvents }) {
     scores: result.scores,
     cadence: result.cadence,
     crmPayloads: result.crmPayloads,
+    personPayloadValidation: result.crmPayloads?.person?.payloadValidation,
     outboundEventPlan: result.outboundEvent.planned,
     schemaValidation: result.schemaValidation,
     warnings: result.warnings

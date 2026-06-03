@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { enrichTwentyRestError } from './errorDiagnostics.js';
 import { normalizeTwentyApiBaseUrl } from './metadataClient.js';
 
 export function createTwentyRestClient(config = {}) {
@@ -24,13 +25,30 @@ export function createTwentyRestClient(config = {}) {
     },
 
     async createRecord(objectPlural, payload) {
-      const response = await http.post(`/rest/${objectPlural}`, payload);
-      return unwrapRecordResponse(response.data, objectPlural);
+      try {
+        const response = await http.post(`/rest/${objectPlural}`, payload);
+        return unwrapRecordResponse(response.data, objectPlural);
+      } catch (error) {
+        throw enrichTwentyRestError(error, {
+          objectPlural,
+          action: 'create',
+          payload
+        });
+      }
     },
 
     async updateRecord(objectPlural, id, payload) {
-      const response = await http.patch(`/rest/${objectPlural}/${id}`, payload);
-      return unwrapRecordResponse(response.data, objectPlural);
+      try {
+        const response = await http.patch(`/rest/${objectPlural}/${id}`, payload);
+        return unwrapRecordResponse(response.data, objectPlural);
+      } catch (error) {
+        throw enrichTwentyRestError(error, {
+          objectPlural,
+          action: 'update',
+          payload,
+          id
+        });
+      }
     },
 
     async findFirstRecord(objectPlural, predicate) {

@@ -4,8 +4,10 @@ import sampleLead from '../data/sample-quick-capture-lead.json' with { type: 'js
 import { buildSchemaSnapshot } from '../src/integrations/twenty/metadataClient.js';
 import {
   buildQuickCaptureCrmPayloads,
-  createQuickCapturePersonPayload
+  createQuickCapturePersonPayload,
+  createTwentyPhonePayload
 } from '../src/integrations/twenty/outboundPayloadBuilders.js';
+import { validateQuickCapturePersonPayload } from '../src/integrations/twenty/personPayloadValidator.js';
 import {
   createQuickCaptureClient,
   PROTECTED_ASSESSMENT_FIELDS
@@ -222,20 +224,7 @@ describe('Quick Capture CRM payload generation', () => {
       lead,
       scores,
       cadence,
-      supportedPersonFields: new Set([
-        'outboundPipelineType',
-        'cadenceName',
-        'cadenceStage',
-        'enrichmentStatus',
-        'icpFitScore',
-        'leadHealthScore',
-        'nextOutboundTouchDate',
-        'outreachAngle',
-        'latestTouchChannel',
-        'latestTouchStatus',
-        'staleRisk',
-        'discoveryReadiness'
-      ])
+      supportedPersonFields: confirmedPersonFields({ includeQuickCaptureUrl: false })
     });
 
     expect(payloads.person.dedupeKey).toBe(
@@ -243,6 +232,21 @@ describe('Quick Capture CRM payload generation', () => {
     );
     expect(payloads.person.payload).toMatchObject({
       name: { firstName: 'Taylor', lastName: 'Morgan' },
+      emails: {
+        primaryEmail: 'visiblegap.quick-capture-test@example.com',
+        additionalEmails: []
+      },
+      phones: {
+        primaryPhoneCountryCode: 'US',
+        primaryPhoneCallingCode: '+1',
+        primaryPhoneNumber: '5550100142',
+        additionalPhones: []
+      },
+      linkedinLink: {
+        primaryLinkUrl: 'https://www.linkedin.com/in/visiblegap-quick-capture-test'
+      },
+      jobTitle: 'VP of Operations',
+      leadSource: 'LINKEDIN_MANUAL_CAPTURE',
       outboundPipelineType: 'ASSESSMENT_CAMPAIGN',
       cadenceName: 'ASSESSMENT_CAMPAIGN_V1',
       cadenceStage: 'CONNECTION_REQUEST',
@@ -280,21 +284,7 @@ describe('Quick Capture CRM payload generation', () => {
           channel: 'LINKEDIN'
         }
       },
-      supportedPersonFields: new Set([
-        'outboundPipelineType',
-        'cadenceName',
-        'cadenceStage',
-        'enrichmentStatus',
-        'icpFitScore',
-        'leadHealthScore',
-        'nextOutboundTouchDate',
-        'outreachAngle',
-        'latestTouchChannel',
-        'latestTouchStatus',
-        'quickCaptureUrl',
-        'staleRisk',
-        'discoveryReadiness'
-      ])
+      supportedPersonFields: confirmedPersonFields()
     });
 
     for (const fieldName of PROTECTED_ASSESSMENT_FIELDS) {
@@ -322,27 +312,120 @@ describe('Quick Capture CRM payload generation', () => {
           channel: 'LINKEDIN'
         }
       },
-      supportedPersonFields: new Set([
-        'outboundPipelineType',
-        'cadenceName',
-        'cadenceStage',
-        'enrichmentStatus',
-        'icpFitScore',
-        'leadHealthScore',
-        'nextOutboundTouchDate',
-        'outreachAngle',
-        'latestTouchChannel',
-        'latestTouchStatus',
-        'quickCaptureUrl',
-        'staleRisk',
-        'discoveryReadiness'
-      ])
+      supportedPersonFields: confirmedPersonFields()
     });
 
     expect(payload.quickCaptureUrl).toEqual({
       primaryLinkUrl: 'https://www.linkedin.com/in/visiblegap-quick-capture-test',
       primaryLinkLabel: 'Quick Capture Source'
     });
+  });
+
+  it('omits unconfirmed Person fields instead of sending speculative fields', () => {
+    const lead = normalizeQuickCaptureLead(sampleLead);
+    const payload = createQuickCapturePersonPayload({
+      lead,
+      scores: {
+        icpFitScore: 80,
+        leadHealthScore: 85,
+        staleRisk: 'LOW',
+        discoveryReadiness: 'MONITOR',
+        outreachAngle: 'Angle.'
+      },
+      cadence: {
+        pipelineType: 'ASSESSMENT_CAMPAIGN',
+        cadenceName: 'ASSESSMENT_CAMPAIGN_V1',
+        cadenceStage: 'CONNECTION_REQUEST',
+        nextOutboundTouchDate: '2026-05-28',
+        firstTask: {
+          channel: 'LINKEDIN'
+        }
+      },
+      supportedPersonFields: new Set(['name', 'emails', 'outboundPipelineType'])
+    });
+
+    expect(Object.keys(payload).sort()).toEqual(['emails', 'name', 'outboundPipelineType']);
+    expect(payload).not.toHaveProperty('leadSource');
+    expect(payload).not.toHaveProperty('phones');
+    expect(payload).not.toHaveProperty('linkedinLink');
+  });
+
+  it('validates Person payload shapes and select values against metadata', () => {
+    const lead = normalizeQuickCaptureLead(sampleLead);
+    const payload = createQuickCapturePersonPayload({
+      lead,
+      scores: {
+        icpFitScore: 80,
+        leadHealthScore: 85,
+        staleRisk: 'LOW',
+        discoveryReadiness: 'MONITOR',
+        outreachAngle: 'Angle.'
+      },
+      cadence: {
+        pipelineType: 'ASSESSMENT_CAMPAIGN',
+        cadenceName: 'ASSESSMENT_CAMPAIGN_V1',
+        cadenceStage: 'CONNECTION_REQUEST',
+        nextOutboundTouchDate: '2026-05-28',
+        firstTask: {
+          channel: 'LINKEDIN'
+        }
+      },
+      supportedPersonFields: confirmedPersonFields()
+    });
+    const validation = validateQuickCapturePersonPayload({
+      payload,
+      lead,
+      schema: quickCapturePersonSchema
+    });
+
+    expect(validation.ok).toBe(true);
+    expect(validation.includedFieldNames).toEqual(
+      expect.arrayContaining(['emails', 'phones', 'linkedinLink', 'latestTouchStatus'])
+    );
+    expect(
+      validation.fieldReport.find((fieldReport) => fieldReport.fieldName === 'phones')
+    ).toMatchObject({
+      status: 'included_valid'
+    });
+  });
+
+  it('omits phone payload when the number lacks country and calling code shape', () => {
+    expect(createTwentyPhonePayload('5555555555')).toBeNull();
+    expect(createTwentyPhonePayload('+1 555 010 0142')).toEqual({
+      primaryPhoneCountryCode: 'US',
+      primaryPhoneCallingCode: '+1',
+      primaryPhoneNumber: '5550100142',
+      additionalPhones: []
+    });
+  });
+
+  it('reports Person payload shape and select value mismatches before writes', () => {
+    const validation = validateQuickCapturePersonPayload({
+      payload: {
+        name: { firstName: 'Taylor', lastName: 'Morgan' },
+        emails: { primaryEmail: 'not-an-email', additionalEmails: [] },
+        phones: { primaryPhoneNumber: '5555555555', additionalPhones: [] },
+        linkedinLink: { primaryLinkUrl: 'linkedin.com/in/taylor', primaryLinkLabel: 'LinkedIn' },
+        latestTouchStatus: 'UNSUPPORTED'
+      },
+      lead: {
+        dedupe: {
+          strategy: 'email'
+        }
+      },
+      schema: quickCapturePersonSchema
+    });
+
+    expect(validation.ok).toBe(false);
+    expect(validation.errors.map((error) => error.message)).toEqual(
+      expect.arrayContaining([
+        'Field "emails.primaryEmail" is not a valid email address.',
+        'Field "phones.primaryPhoneCountryCode" is required for Twenty phones shape.',
+        'Field "phones.primaryPhoneCallingCode" is required for Twenty phones shape.',
+        'Field "linkedinLink.primaryLinkUrl" must be an http(s) URL.',
+        'Field "latestTouchStatus" value "UNSUPPORTED" is not in Twenty select options.'
+      ])
+    );
   });
 });
 
@@ -480,21 +563,7 @@ describe('Quick Capture live client planning', () => {
       lead,
       scores,
       cadence,
-      supportedPersonFields: new Set([
-        'outboundPipelineType',
-        'cadenceName',
-        'cadenceStage',
-        'enrichmentStatus',
-        'icpFitScore',
-        'leadHealthScore',
-        'nextOutboundTouchDate',
-        'outreachAngle',
-        'latestTouchChannel',
-        'latestTouchStatus',
-        'quickCaptureUrl',
-        'staleRisk',
-        'discoveryReadiness'
-      ])
+      supportedPersonFields: confirmedPersonFields()
     });
     const restClient = createFakeQuickCaptureRestClient({
       people: [
@@ -535,6 +604,51 @@ describe('Quick Capture live client planning', () => {
     });
     expect(restClient.snapshot().people).toHaveLength(1);
     expect(restClient.snapshot().tasks).toHaveLength(1);
+  });
+
+  it('returns structured diagnostics for Person 400 responses', async () => {
+    const { lead, payloads } = buildQuickCaptureTestPlan();
+    const restClient = createPersonFailureRestClient({
+      error: badRequestError({
+        message: 'Validation failed',
+        errors: [{ message: 'phones.primaryPhoneCountryCode is required' }]
+      })
+    });
+    const client = createQuickCaptureClient({ dryRun: false, restClient });
+    const result = await client.syncQuickCaptureOperations({
+      lead,
+      operations: [payloads.person]
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.operations[0]).toMatchObject({
+      object: 'person',
+      status: 'failed',
+      error: {
+        httpStatus: 400,
+        responseBody: {
+          message: 'Validation failed'
+        },
+        validationMessages: expect.arrayContaining([
+          'Validation failed',
+          'phones.primaryPhoneCountryCode is required'
+        ]),
+        diagnostics: {
+          failingOperation: {
+            object: 'person',
+            action: 'upsert',
+            dedupeKey: 'person:email:visiblegap.quick-capture-test@example.com'
+          },
+          dedupeStrategy: 'email',
+          fieldNames: expect.arrayContaining(['name', 'emails', 'phones']),
+          sanitizedRequestPayload: {
+            emails: {
+              primaryEmail: 'visiblegap.quick-capture-test@example.com'
+            }
+          }
+        }
+      }
+    });
   });
 });
 
@@ -840,6 +954,73 @@ const outboundSchemaWithoutQuickCaptureUrl = buildSchemaSnapshot([
   }
 ]);
 
+const quickCapturePersonSchema = buildSchemaSnapshot([
+  {
+    nameSingular: 'person',
+    namePlural: 'people',
+    fields: [
+      field('name', 'FULL_NAME'),
+      field('emails', 'EMAILS'),
+      field('phones', 'PHONES'),
+      field('linkedinLink', 'LINKS'),
+      field('jobTitle', 'TEXT'),
+      field('company', 'RELATION'),
+      field('owner', 'RELATION'),
+      field('leadSource', 'TEXT'),
+      field('outboundPipelineType', 'SELECT', {
+        isCustom: true,
+        options: ['ASSESSMENT_CAMPAIGN', 'RELATIONSHIP_BUILDING', 'GENERAL_PROSPECT']
+      }),
+      field('cadenceName', 'SELECT', {
+        isCustom: true,
+        options: ['ASSESSMENT_CAMPAIGN_V1', 'RELATIONSHIP_BUILDING_V1', 'NONE']
+      }),
+      field('cadenceStage', 'SELECT', {
+        isCustom: true,
+        options: [
+          'NOT_STARTED',
+          'CONNECTION_REQUEST',
+          'INTRO_MESSAGE',
+          'ASSESSMENT_POSITIONING',
+          'ASSESSMENT_SENT',
+          'ASSESSMENT_CHECK_IN',
+          'VALUE_TOUCH',
+          'STRATEGIC_CHECK_IN',
+          'DISCOVERY_ASK',
+          'PAUSED',
+          'COMPLETED'
+        ]
+      }),
+      field('enrichmentStatus', 'SELECT', {
+        isCustom: true,
+        options: ['NOT_STARTED', 'PARTIAL', 'ENRICHED', 'NEEDS_REVIEW', 'FAILED']
+      }),
+      field('icpFitScore', 'NUMBER', { isCustom: true }),
+      field('leadHealthScore', 'NUMBER', { isCustom: true }),
+      field('lastOutboundTouchDate', 'DATE', { isCustom: true }),
+      field('nextOutboundTouchDate', 'DATE', { isCustom: true }),
+      field('outreachAngle', 'TEXT', { isCustom: true }),
+      field('latestTouchChannel', 'SELECT', {
+        isCustom: true,
+        options: ['LINKEDIN', 'EMAIL', 'PHONE', 'TEXT', 'IN_PERSON', 'OTHER']
+      }),
+      field('latestTouchStatus', 'SELECT', {
+        isCustom: true,
+        options: ['DRAFTED', 'SENT', 'RESPONDED', 'NO_RESPONSE', 'BOUNCED', 'DECLINED', 'COMPLETED']
+      }),
+      field('quickCaptureUrl', 'LINKS', { isCustom: true }),
+      field('staleRisk', 'SELECT', {
+        isCustom: true,
+        options: ['LOW', 'MEDIUM', 'HIGH', 'STALE']
+      }),
+      field('discoveryReadiness', 'SELECT', {
+        isCustom: true,
+        options: ['NOT_READY', 'MONITOR', 'READY', 'REQUESTED', 'BOOKED']
+      })
+    ]
+  }
+]);
+
 function buildQuickCaptureTestPlan() {
   const lead = normalizeQuickCaptureLead(sampleLead);
   const cadence = planInitialCadence({
@@ -862,23 +1043,35 @@ function buildQuickCaptureTestPlan() {
       lead,
       scores,
       cadence,
-      supportedPersonFields: new Set([
-        'outboundPipelineType',
-        'cadenceName',
-        'cadenceStage',
-        'enrichmentStatus',
-        'icpFitScore',
-        'leadHealthScore',
-        'nextOutboundTouchDate',
-        'outreachAngle',
-        'latestTouchChannel',
-        'latestTouchStatus',
-        'quickCaptureUrl',
-        'staleRisk',
-        'discoveryReadiness'
-      ])
+      supportedPersonFields: confirmedPersonFields()
     })
   };
+}
+
+function confirmedPersonFields({ includeQuickCaptureUrl = true } = {}) {
+  return new Set(
+    [
+      'name',
+      'emails',
+      'phones',
+      'linkedinLink',
+      'jobTitle',
+      'leadSource',
+      'outboundPipelineType',
+      'cadenceName',
+      'cadenceStage',
+      'enrichmentStatus',
+      'icpFitScore',
+      'leadHealthScore',
+      'nextOutboundTouchDate',
+      'outreachAngle',
+      'latestTouchChannel',
+      'latestTouchStatus',
+      includeQuickCaptureUrl ? 'quickCaptureUrl' : null,
+      'staleRisk',
+      'discoveryReadiness'
+    ].filter(Boolean)
+  );
 }
 
 function field(name, type, overrides = {}) {
@@ -976,6 +1169,37 @@ function retryableHttpError(status, details = {}) {
   };
 
   return error;
+}
+
+function badRequestError(data) {
+  const error = new Error('Request failed with status code 400');
+  error.code = 'ERR_BAD_REQUEST';
+  error.response = {
+    status: 400,
+    data
+  };
+
+  return error;
+}
+
+function createPersonFailureRestClient({ error }) {
+  return {
+    async findFirstRecord() {
+      return null;
+    },
+
+    async createRecord(objectPlural) {
+      if (objectPlural === 'people') {
+        throw error;
+      }
+
+      return { id: `${objectPlural}-1` };
+    },
+
+    async updateRecord() {
+      throw error;
+    }
+  };
 }
 
 function createFakeQuickCaptureRestClient(seed = {}) {

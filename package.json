@@ -17,7 +17,8 @@
     "test:webhook:staging": "node scripts/sendStagingWebhookTest.js",
     "quick-capture:dry": "node scripts/runQuickCaptureDryRun.js",
     "quick-capture:live": "node scripts/runQuickCaptureLiveTest.js",
-    "quick-capture:retry-failed": "node scripts/retryQuickCaptureFailedOperations.js"
+    "quick-capture:retry-failed": "node scripts/retryQuickCaptureFailedOperations.js",
+    "quick-capture:inspect-latest": "node scripts/inspectLatestQuickCaptureCommit.js"
   },
   "keywords": [
     "visible-gap",

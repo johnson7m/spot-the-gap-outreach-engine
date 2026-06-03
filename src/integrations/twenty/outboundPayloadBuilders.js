@@ -78,11 +78,10 @@ export function createQuickCapturePersonPayload({
     };
   }
 
-  if (lead.phone) {
-    payload.phones = {
-      primaryPhoneNumber: lead.phone,
-      additionalPhones: []
-    };
+  const phonePayload = createTwentyPhonePayload(lead.phone);
+
+  if (phonePayload) {
+    payload.phones = phonePayload;
   }
 
   if (lead.title) {
@@ -168,20 +167,30 @@ function stripUnsupportedPersonFields(payload, supportedPersonFields) {
     return payload;
   }
 
-  const standardFields = new Set([
-    'name',
-    'emails',
-    'phones',
-    'jobTitle',
-    'linkedinLink',
-    'leadSource'
-  ]);
-
   return Object.fromEntries(
-    Object.entries(payload).filter(([fieldName]) =>
-      standardFields.has(fieldName) || supportedPersonFields.has(fieldName)
-    )
+    Object.entries(payload).filter(([fieldName]) => supportedPersonFields.has(fieldName))
   );
+}
+
+export function createTwentyPhonePayload(phone) {
+  const value = String(phone ?? '').trim();
+
+  if (!value) {
+    return null;
+  }
+
+  const digits = value.replace(/\D/g, '');
+
+  if (!value.startsWith('+1') || digits.length !== 11 || !digits.startsWith('1')) {
+    return null;
+  }
+
+  return {
+    primaryPhoneCountryCode: 'US',
+    primaryPhoneCallingCode: '+1',
+    primaryPhoneNumber: digits.slice(1),
+    additionalPhones: []
+  };
 }
 
 function stripEmpty(value) {

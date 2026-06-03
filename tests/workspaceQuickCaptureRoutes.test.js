@@ -309,6 +309,86 @@ describe('workspace Quick Capture API', () => {
     });
   });
 
+  it('returns Person operation diagnostics in partial-failure commit responses', async () => {
+    const response = await invokeCommit({
+      config: {
+        ...baseConfig,
+        quickCapture: {
+          ...baseConfig.quickCapture,
+          apiCommitEnabled: true
+        },
+        twenty: {
+          ...baseConfig.twenty,
+          syncEnabled: true,
+          apiKey: 'test-key'
+        }
+      },
+      headers: {
+        'x-visible-gap-workspace-secret': 'workspace-secret'
+      },
+      body: { lead: sampleLead, previewId: 'preview-1' },
+      dependencies: {
+        processQuickCaptureLeadFn: async () => fakeQuickCapturePlan(),
+        createCrmAdapterFn: () => ({
+          async syncQuickCaptureLead({ payloads }) {
+            return {
+              provider: 'twenty',
+              status: 'partial_failure',
+              dryRun: false,
+              operations: [
+                succeededOperation('company', 'companies-1', payloads.company),
+                {
+                  object: 'person',
+                  action: 'upsert',
+                  status: 'failed',
+                  dedupeKey: payloads.person.dedupeKey,
+                  payload: payloads.person.payload,
+                  error: {
+                    message: 'Request failed with status code 400',
+                    httpStatus: 400,
+                    responseBody: {
+                      message: 'Validation failed'
+                    },
+                    validationMessages: ['phones.primaryPhoneCountryCode is required'],
+                    diagnostics: {
+                      failingOperation: {
+                        object: 'person',
+                        action: 'upsert',
+                        dedupeKey: payloads.person.dedupeKey
+                      },
+                      fieldNames: Object.keys(payloads.person.payload),
+                      dedupeStrategy: 'email',
+                      sanitizedRequestPayload: payloads.person.payload
+                    }
+                  }
+                },
+                succeededOperation('task', 'tasks-1', payloads.task)
+              ],
+              skippedRelationships: []
+            };
+          }
+        })
+      }
+    });
+
+    expect(response.statusCode).toBe(207);
+    expect(response.body.data.crmResults.find((result) => result.object === 'person')).toMatchObject({
+      status: 'failed',
+      httpStatus: 400,
+      responseBody: {
+        message: 'Validation failed'
+      },
+      validationMessages: ['phones.primaryPhoneCountryCode is required'],
+      diagnostics: {
+        failingOperation: {
+          object: 'person',
+          action: 'upsert'
+        },
+        dedupeStrategy: 'email'
+      }
+    });
+  });
+
   it('commits with an authenticated rep when commit env flags are enabled', async () => {
     let workflowInput;
     const response = await invokeCommit({

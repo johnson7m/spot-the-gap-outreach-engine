@@ -75,6 +75,13 @@ async function main() {
     return;
   }
 
+  if (!livePlan.crmPayloads?.person?.payloadValidation?.ok) {
+    console.error('Quick Capture live test blocked because Person payload validation failed.');
+    console.error(JSON.stringify(livePlan.crmPayloads.person.payloadValidation, null, 2));
+    process.exitCode = 1;
+    return;
+  }
+
   const adapter = createCrmAdapter({
     provider: config.crmProvider ?? 'twenty',
     config,
@@ -125,6 +132,7 @@ function printExecutionPlan({ guard, plan }) {
         liveWritesEnabled: guard.mode === 'live' && guard.ok,
         normalizedLead: plan.normalizedLead,
         crmPayloads: plan.crmPayloads,
+        personPayloadValidation: plan.crmPayloads?.person?.payloadValidation,
         cadence: plan.cadence,
         schemaValidation: plan.schemaValidation,
         protectedAssessmentFields: {
@@ -165,7 +173,12 @@ async function appendQuickCaptureCrmAuditLogs({ store, plan, crmSync, startedAt,
         dedupeKey: operation.dedupeKey,
         status: normalizeAuditStatus(operation.status),
         attempt: operation.attempts ?? 1,
-        requestPayload: operation.payload,
+        requestPayload: {
+          payload: operation.payload,
+          fieldNames: Object.keys(operation.payload ?? {}),
+          dedupeStrategy: plan.normalizedLead?.dedupe?.strategy ?? null,
+          payloadValidation: operation.payloadValidation
+        },
         responsePayload: operation.response,
         errorPayload: operation.error,
         startedAt,

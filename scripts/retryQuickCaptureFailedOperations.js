@@ -194,7 +194,12 @@ async function appendRecoveryAuditLogs({ store, plan, crmSync, startedAt, finish
         dedupeKey: operation.dedupeKey,
         status: normalizeAuditStatus(operation.status),
         attempt: plan.maxPriorAttempt + (operation.attempts ?? 1),
-        requestPayload: operation.payload,
+        requestPayload: {
+          payload: operation.payload,
+          fieldNames: Object.keys(operation.payload ?? {}),
+          dedupeStrategy: plan.lead?.dedupe?.strategy ?? null,
+          payloadValidation: operation.payloadValidation
+        },
         responsePayload: operation.response,
         errorPayload: operation.error,
         startedAt,
@@ -241,11 +246,14 @@ async function updateOutboundEventRecoveryStatus({ supabase, plan, crmSync, audi
 }
 
 function toOperation(row) {
+  const requestPayload = row.request_payload?.payload ?? row.request_payload;
+
   return {
     object: row.object_name,
     action: row.action,
     dedupeKey: row.dedupe_key,
-    payload: row.request_payload
+    payload: requestPayload,
+    payloadValidation: row.request_payload?.payloadValidation
   };
 }
 

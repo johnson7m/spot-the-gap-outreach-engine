@@ -3,6 +3,10 @@ import {
   getRetryErrorDetails,
   isRetryableTwentyError
 } from '../../utils/retryPolicy.js';
+import {
+  extractTwentyValidationMessages,
+  sanitizePayloadForDiagnostics
+} from './errorDiagnostics.js';
 
 export const PROTECTED_ASSESSMENT_FIELDS = [
   'assessmentCompleted',
@@ -72,6 +76,7 @@ async function executeQuickCaptureOperations({
     operationResults.push(
       await runOperationWithRetry({
         operation,
+        lead,
         dryRun,
         log,
         retryPolicy,
@@ -103,7 +108,7 @@ function buildOperationsFromPayloads(payloads = {}) {
   return [payloads.company, payloads.person, payloads.task].filter(Boolean);
 }
 
-async function runOperationWithRetry({ operation, execute, dryRun, log, retryPolicy }) {
+async function runOperationWithRetry({ operation, lead, execute, dryRun, log, retryPolicy }) {
   let attempt = 0;
   const maxAttempts = dryRun ? 1 : retryPolicy.maxRetries + 1;
 
@@ -123,11 +128,16 @@ async function runOperationWithRetry({ operation, execute, dryRun, log, retryPol
       const canRetry = retryable && attempt < maxAttempts;
 
       if (!canRetry) {
-        return toFailedOperation(operation, error, {
-          attempts: attempt,
-          retryCount: attempt - 1,
-          maxRetries: retryPolicy.maxRetries
-        });
+        return toFailedOperation(
+          operation,
+          error,
+          {
+            attempts: attempt,
+            retryCount: attempt - 1,
+            maxRetries: retryPolicy.maxRetries
+          },
+          { lead }
+        );
       }
 
       const delayMs = calculateRetryDelayMs({
@@ -187,27 +197,6 @@ function executeQuickCaptureOperation({ operation, lead, dryRun, restClient, log
   throw new Error(`Unsupported Quick Capture CRM operation object "${operation.object}".`);
 }
 
-function toFailedOperation(operation, error, retryMeta) {
-  const retryDetails = getRetryErrorDetails(error);
-
-  return {
-    object: operation.object,
-    action: operation.action,
-    status: 'failed',
-    dedupeKey: operation.dedupeKey,
-    payload: operation.payload,
-    attempts: retryMeta.attempts,
-    retryCount: retryMeta.retryCount,
-    maxRetries: retryMeta.maxRetries,
-    error: {
-      message: error.message,
-      code: error.code,
-      details: error.response?.data ?? error.details,
-      ...stripUndefined(retryDetails)
-    }
-  };
-}
-
 export function assertNoProtectedAssessmentFields(payload) {
   const present = PROTECTED_ASSESSMENT_FIELDS.filter((fieldName) =>
     Object.hasOwn(payload, fieldName)
@@ -248,6 +237,7 @@ async function executeCompanyOperation({ operation, dryRun, restClient, log }) {
 
 async function executePersonOperation({ operation, lead, dryRun, restClient, log }) {
   assertNoProtectedAssessmentFields(operation.payload);
+  assertValidPersonPayload(operation);
 
   if (dryRun) {
     log?.info?.({ object: 'person', dedupeKey: operation.dedupeKey }, 'Quick Capture Person dry-run');
@@ -271,6 +261,16 @@ async function executePersonOperation({ operation, lead, dryRun, restClient, log
     duplicateAvoided: false,
     matchedBy: null
   });
+}
+
+function assertValidPersonPayload(operation) {
+  if (operation.payloadValidation?.ok === false) {
+    const error = new Error('Quick Capture Person payload failed metadata validation.');
+
+    error.code = 'PERSON_PAYLOAD_VALIDATION_FAILED';
+    error.details = operation.payloadValidation;
+    throw error;
+  }
 }
 
 async function executeTaskOperation({ operation, dryRun, restClient, log }) {
@@ -385,7 +385,8 @@ function toDryRunOperation(operation) {
     action: operation.action,
     status: 'dry_run',
     dedupeKey: operation.dedupeKey,
-    payload: operation.payload
+    payload: operation.payload,
+    payloadValidation: operation.payloadValidation
   };
 }
 
@@ -396,8 +397,55 @@ function toSucceededOperation(operation, action, response, extras = {}) {
     status: 'succeeded',
     dedupeKey: operation.dedupeKey,
     payload: operation.payload,
+    payloadValidation: operation.payloadValidation,
     response,
     ...extras
+  };
+}
+
+function toFailedOperation(operation, error, retryMeta, { lead } = {}) {
+  const retryDetails = getRetryErrorDetails(error);
+  const twentyDiagnostics = error.twentyDiagnostics ?? {};
+  const httpStatus = twentyDiagnostics.httpStatus ?? error.response?.status;
+  const responseBody = twentyDiagnostics.responseBody ?? sanitizePayloadForDiagnostics(error.response?.data ?? error.details);
+  const validationMessages =
+    twentyDiagnostics.validationMessages?.length > 0
+      ? twentyDiagnostics.validationMessages
+      : extractTwentyValidationMessages(error.response?.data ?? error.details);
+  const diagnostics = {
+    failingOperation: {
+      object: operation.object,
+      action: operation.action,
+      dedupeKey: operation.dedupeKey
+    },
+    fieldNames: Object.keys(operation.payload ?? {}),
+    dedupeStrategy: lead?.dedupe?.strategy ?? null,
+    sanitizedRequestPayload:
+      twentyDiagnostics.sanitizedRequestPayload ??
+      sanitizePayloadForDiagnostics(operation.payload),
+    payloadValidation: operation.payloadValidation ?? null
+  };
+
+  return {
+    object: operation.object,
+    action: operation.action,
+    status: 'failed',
+    dedupeKey: operation.dedupeKey,
+    payload: operation.payload,
+    payloadValidation: operation.payloadValidation,
+    attempts: retryMeta.attempts,
+    retryCount: retryMeta.retryCount,
+    maxRetries: retryMeta.maxRetries,
+    error: {
+      message: error.message,
+      code: error.code,
+      httpStatus,
+      responseBody,
+      validationMessages,
+      details: responseBody,
+      diagnostics,
+      ...stripUndefined(retryDetails)
+    }
   };
 }
 

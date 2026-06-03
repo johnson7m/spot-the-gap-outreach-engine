@@ -152,6 +152,31 @@ export async function handleQuickCaptureCommit(
       return;
     }
 
+    const personPayloadValidation = plan.crmPayloads?.person?.payloadValidation;
+
+    if (personPayloadValidation && !personPayloadValidation.ok) {
+      res.status(422).json(
+        errorEnvelope({
+          correlationId: req.correlationId,
+          code: 'PERSON_PAYLOAD_VALIDATION_FAILED',
+          message: 'Quick Capture commit blocked because the Person payload is not safe to write to Twenty.',
+          data: {
+            partialResults: {
+              outboundEvent: {
+                id: plan.outboundEvent?.persisted?.id ?? null,
+                status: plan.outboundEvent?.persisted?.status ?? plan.outboundEvent?.planned?.status
+              },
+              crmResults: [],
+              auditLogs: []
+            },
+            personPayloadValidation: plan.crmPayloads.person.payloadValidation,
+            protectedFieldCheck: buildProtectedFieldCheck(plan.crmPayloads.person.payload)
+          }
+        })
+      );
+      return;
+    }
+
     const adapter = createCrmAdapterFn({
       provider: config.crmProvider ?? 'twenty',
       config,
@@ -235,6 +260,7 @@ function toPreviewResponse(plan) {
     cadencePlan: plan.cadence,
     schemaValidation: plan.schemaValidation,
     protectedFieldCheck: buildProtectedFieldCheck(plan.crmPayloads?.person?.payload),
+    personPayloadValidation: plan.crmPayloads?.person?.payloadValidation,
     outboundEventPreview: plan.outboundEvent?.planned,
     workspaceUser: sanitizeWorkspaceUser(plan.workspaceUser)
   };
@@ -257,7 +283,12 @@ function toCommitResponse({ plan, crmSync, auditLogs, workspaceUser }) {
       duplicateAvoided: operation.duplicateAvoided,
       matchedBy: operation.matchedBy,
       dedupeKey: operation.dedupeKey,
-      error: operation.error?.message
+      error: operation.error?.message,
+      httpStatus: operation.error?.httpStatus,
+      responseBody: operation.error?.responseBody,
+      validationMessages: operation.error?.validationMessages,
+      diagnostics: operation.error?.diagnostics,
+      payloadValidation: operation.payloadValidation
     })),
     auditLogs: {
       persisted: auditLogs.length > 0,
@@ -265,6 +296,7 @@ function toCommitResponse({ plan, crmSync, auditLogs, workspaceUser }) {
     },
     workspaceUser: sanitizeWorkspaceUser(workspaceUser ?? plan.workspaceUser),
     protectedFieldCheck: buildProtectedFieldCheck(plan.crmPayloads?.person?.payload),
+    personPayloadValidation: plan.crmPayloads?.person?.payloadValidation,
     skippedRelationships: crmSync.skippedRelationships ?? []
   };
 }
@@ -346,6 +378,9 @@ async function appendQuickCaptureCrmAuditLogs({ store, plan, crmSync }) {
         attempt: operation.attempts ?? 1,
         requestPayload: {
           payload: operation.payload,
+          fieldNames: Object.keys(operation.payload ?? {}),
+          dedupeStrategy: plan.normalizedLead?.dedupe?.strategy ?? null,
+          payloadValidation: operation.payloadValidation,
           workspaceUser: sanitizeWorkspaceUser(plan.workspaceUser)
         },
         responsePayload: operation.response,

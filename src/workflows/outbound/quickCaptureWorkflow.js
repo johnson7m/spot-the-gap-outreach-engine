@@ -7,6 +7,7 @@ import {
   buildOutboundOutreachAngle,
   scoreOutboundLead
 } from '../../utils/outboundLeadScoring.js';
+import { validateQuickCapturePersonPayload } from '../../integrations/twenty/personPayloadValidator.js';
 import {
   mapWorkspaceUserToOutboundActorContext,
   sanitizeWorkspaceUser
@@ -53,6 +54,14 @@ export async function processQuickCaptureLead({
     cadence,
     supportedPersonFields: personFieldOptions.supportedFields
   });
+  const personPayloadValidation = validateQuickCapturePersonPayload({
+    payload: payloads.person.payload,
+    lead: leadForScoring,
+    schema: schemaResult.schema
+  });
+
+  payloads.person.payloadValidation = personPayloadValidation;
+
   const shouldPersistEvents =
     persistEvents ?? Boolean(config.supabase?.enabled && operationalStore);
   const outboundEvent = buildOutboundEvent({
@@ -87,7 +96,8 @@ export async function processQuickCaptureLead({
     warnings: [
       ...schemaResult.warnings,
       ...(schemaResult.validation?.warnings ?? []),
-      ...(schemaResult.validation?.errors ?? []).map((error) => `Outbound schema issue: ${error}`)
+      ...(schemaResult.validation?.errors ?? []).map((error) => `Outbound schema issue: ${error}`),
+      ...buildPersonPayloadWarnings({ lead: leadForScoring, personPayloadValidation })
     ]
   };
 }
@@ -184,4 +194,20 @@ function getOptions(field) {
   return (field?.options ?? []).map((option) =>
     typeof option === 'string' ? option : option.value
   );
+}
+
+function buildPersonPayloadWarnings({ lead, personPayloadValidation }) {
+  const warnings = [];
+
+  if (lead.phone && !personPayloadValidation.sanitizedRequestPayload?.phones) {
+    warnings.push(
+      'Person phone omitted because Twenty PHONES writes require country code and calling code; capture E.164 +1 numbers to write phones safely.'
+    );
+  }
+
+  for (const error of personPayloadValidation.errors ?? []) {
+    warnings.push(`Person payload issue: ${error.message}`);
+  }
+
+  return warnings;
 }
