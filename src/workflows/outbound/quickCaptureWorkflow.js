@@ -7,6 +7,10 @@ import {
   buildOutboundOutreachAngle,
   scoreOutboundLead
 } from '../../utils/outboundLeadScoring.js';
+import {
+  mapWorkspaceUserToOutboundActorContext,
+  sanitizeWorkspaceUser
+} from '../../utils/outboundActorMapper.js';
 import { normalizeQuickCaptureLead } from './leadIntakeWorkflow.js';
 
 export async function processQuickCaptureLead({
@@ -89,7 +93,7 @@ export async function processQuickCaptureLead({
 }
 
 function buildOutboundEvent({ lead, scores, cadence, payloads, workspaceUser, now }) {
-  const sanitizedWorkspaceUser = sanitizeWorkspaceUser(workspaceUser);
+  const actorContext = mapWorkspaceUserToOutboundActorContext(workspaceUser);
 
   return {
     assessmentSubmissionId: null,
@@ -97,11 +101,11 @@ function buildOutboundEvent({ lead, scores, cadence, payloads, workspaceUser, no
     eventType: 'quick_capture_planned',
     channel: cadence.firstTask.channel.toLowerCase(),
     status: 'planned',
-    actorType: sanitizedWorkspaceUser?.authenticated ? 'workspace_user' : 'system',
+    actorType: actorContext.actorType,
     requiresApproval: true,
     payload: {
       capturedAt: now.toISOString(),
-      workspaceUser: sanitizedWorkspaceUser,
+      workspaceUser: actorContext.workspaceUser,
       lead,
       scores,
       cadence,
@@ -112,22 +116,6 @@ function buildOutboundEvent({ lead, scores, cadence, payloads, workspaceUser, no
       )
     },
     scheduledFor: cadence.firstTask.dueAt
-  };
-}
-
-function sanitizeWorkspaceUser(workspaceUser) {
-  if (!workspaceUser) {
-    return null;
-  }
-
-  return {
-    authenticated: Boolean(workspaceUser.authenticated),
-    userId: workspaceUser.userId ?? null,
-    email: workspaceUser.email ?? null,
-    fullName: workspaceUser.fullName ?? null,
-    role: workspaceUser.role ?? null,
-    roleSource: workspaceUser.roleSource ?? null,
-    profileId: workspaceUser.profileId ?? null
   };
 }
 

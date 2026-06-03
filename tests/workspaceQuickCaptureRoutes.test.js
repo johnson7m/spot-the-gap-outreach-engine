@@ -384,7 +384,7 @@ describe('workspace Quick Capture API', () => {
     });
 
     expect(response.body.data.outboundEventPreview).toMatchObject({
-      actorType: 'workspace_user',
+      actorType: 'human',
       payload: {
         workspaceUser: {
           userId: 'workspace-user-1',
@@ -392,6 +392,53 @@ describe('workspace Quick Capture API', () => {
           roleSource: 'profile'
         }
       }
+    });
+    expect(response.body.data.outboundEventPreview.actorType).not.toBe('workspace_user');
+  });
+
+  it('returns a structured non-retryable error for outbound event actor constraint failures', async () => {
+    const response = await invokeCommit({
+      config: {
+        ...baseConfig,
+        quickCapture: {
+          ...baseConfig.quickCapture,
+          apiCommitEnabled: true
+        },
+        twenty: {
+          ...baseConfig.twenty,
+          syncEnabled: true
+        }
+      },
+      headers: {
+        'x-visible-gap-workspace-secret': 'workspace-secret'
+      },
+      body: { lead: sampleLead, previewId: 'preview-1' },
+      dependencies: {
+        processQuickCaptureLeadFn: async () => {
+          throw outboundEventActorConstraintError();
+        }
+      }
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.body).toMatchObject({
+      ok: false,
+      correlationId: 'test-correlation-id',
+      data: {
+        partialResults: {
+          outboundEvent: null,
+          crmResults: [],
+          auditLogs: []
+        }
+      },
+      warnings: [],
+      errors: [
+        {
+          code: 'OUTBOUND_EVENT_CONSTRAINT_ERROR',
+          operation: 'outbound_event_persist',
+          retryable: false
+        }
+      ]
     });
   });
 
@@ -611,7 +658,7 @@ function fakeQuickCapturePlan({ workspaceUser } = {}) {
     outboundEvent: {
       planned: {
         correlationId: `quick-capture:person:email:${sampleLead.email}`,
-        actorType: workspaceUser?.authenticated ? 'workspace_user' : 'system',
+        actorType: workspaceUser?.authenticated ? 'human' : 'system',
         payload: {
           workspaceUser: workspaceUser ?? null
         },
@@ -704,4 +751,18 @@ function createFakeWorkspaceSupabaseClient({ profile, token = 'valid-token' } = 
       };
     }
   };
+}
+
+function outboundEventActorConstraintError() {
+  const error = new Error(
+    'Failed to write outbound event. new row for relation "outbound_events" violates check constraint "outbound_events_actor_type_check"'
+  );
+  error.code = '23514';
+  error.details = {
+    code: '23514',
+    message:
+      'new row for relation "outbound_events" violates check constraint "outbound_events_actor_type_check"',
+    details: 'Failing row contains actor_type workspace_user.'
+  };
+  return error;
 }

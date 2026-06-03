@@ -6,6 +6,7 @@ import {
   createSupabaseWorkspaceAuth,
   requireWorkspaceAuthOrSecret
 } from '../../middleware/supabaseWorkspaceAuth.js';
+import { sanitizeWorkspaceUser } from '../../utils/outboundActorMapper.js';
 import { processQuickCaptureLead } from '../../workflows/outbound/quickCaptureWorkflow.js';
 
 const QUICK_CAPTURE_WORKSPACE_ROLES = ['admin', 'operator', 'rep'];
@@ -358,22 +359,6 @@ async function appendQuickCaptureCrmAuditLogs({ store, plan, crmSync }) {
   return logs;
 }
 
-function sanitizeWorkspaceUser(workspaceUser) {
-  if (!workspaceUser) {
-    return null;
-  }
-
-  return {
-    authenticated: Boolean(workspaceUser.authenticated),
-    userId: workspaceUser.userId ?? null,
-    email: workspaceUser.email ?? null,
-    fullName: workspaceUser.fullName ?? null,
-    role: workspaceUser.role ?? null,
-    roleSource: workspaceUser.roleSource ?? null,
-    profileId: workspaceUser.profileId ?? null
-  };
-}
-
 function normalizeAuditStatus(status) {
   if (['dry_run', 'skipped', 'failed'].includes(status)) {
     return status;
@@ -392,7 +377,7 @@ function successEnvelope({ correlationId, data, warnings = [] }) {
   };
 }
 
-function errorEnvelope({ correlationId, code, message, data = null }) {
+function errorEnvelope({ correlationId, code, message, data = null, error = {} }) {
   return {
     ok: false,
     correlationId,
@@ -401,13 +386,37 @@ function errorEnvelope({ correlationId, code, message, data = null }) {
     errors: [
       {
         code,
-        message
+        message,
+        ...error
       }
     ]
   };
 }
 
 function handleQuickCaptureError(error, req, res, next) {
+  if (isOutboundEventConstraintError(error)) {
+    res.status(422).json(
+      errorEnvelope({
+        correlationId: req.correlationId,
+        code: 'OUTBOUND_EVENT_CONSTRAINT_ERROR',
+        message:
+          'Quick Capture outbound event persistence failed because the actor type is not allowed by the database schema.',
+        data: {
+          partialResults: {
+            outboundEvent: null,
+            crmResults: [],
+            auditLogs: []
+          }
+        },
+        error: {
+          operation: 'outbound_event_persist',
+          retryable: false
+        }
+      })
+    );
+    return;
+  }
+
   if (!/Invalid quick capture lead/.test(error.message)) {
     next(error);
     return;
@@ -422,5 +431,24 @@ function handleQuickCaptureError(error, req, res, next) {
         details: error.details ?? []
       }
     })
+  );
+}
+
+function isOutboundEventConstraintError(error) {
+  const haystack = [
+    error?.message,
+    error?.code,
+    error?.details?.message,
+    error?.details?.details,
+    error?.details?.hint,
+    error?.details?.code,
+    error?.details?.constraint
+  ]
+    .filter(Boolean)
+    .join(' ');
+
+  return (
+    error?.code === '23514' &&
+    /outbound_events_actor_type_check|outbound_events.*actor_type|actor_type/i.test(haystack)
   );
 }

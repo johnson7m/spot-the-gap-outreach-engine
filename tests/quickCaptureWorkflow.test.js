@@ -19,6 +19,7 @@ import {
   extractRetryAfterMs,
   isRetryableTwentyError
 } from '../src/utils/retryPolicy.js';
+import { mapWorkspaceUserToOutboundActorContext } from '../src/utils/outboundActorMapper.js';
 import { planInitialCadence } from '../src/utils/cadencePlanner.js';
 import { scoreOutboundLead } from '../src/utils/outboundLeadScoring.js';
 import { evaluateQuickCaptureSyncTestMode } from '../src/utils/syncTestGuards.js';
@@ -96,6 +97,63 @@ describe('Quick Capture normalization', () => {
     });
     expect(fallbackLead.dedupe.strategy).toBe('name_company');
     expect(fallbackLead.dedupe.key).toMatch(/^person:name-company:/);
+  });
+});
+
+describe('Quick Capture outbound actor mapping', () => {
+  it('maps authenticated reps to a schema-allowed human actor type', () => {
+    const actorContext = mapWorkspaceUserToOutboundActorContext({
+      authenticated: true,
+      userId: 'workspace-user-1',
+      email: 'rep@visiblegap.com',
+      fullName: 'Visible Gap Rep',
+      role: 'rep',
+      roleSource: 'profile'
+    });
+
+    expect(actorContext.actorType).toBe('human');
+    expect(actorContext.actorType).not.toBe('workspace_user');
+    expect(actorContext.workspaceUser).toMatchObject({
+      userId: 'workspace-user-1',
+      email: 'rep@visiblegap.com',
+      role: 'rep',
+      roleSource: 'profile'
+    });
+  });
+
+  it('maps authenticated admins to human because admin is not an allowed actor_type', () => {
+    const actorContext = mapWorkspaceUserToOutboundActorContext({
+      authenticated: true,
+      userId: 'workspace-admin-1',
+      email: 'admin@visiblegap.com',
+      fullName: 'Visible Gap Admin',
+      role: 'admin',
+      roleSource: 'profile',
+      profileId: 'profile-admin-1'
+    });
+
+    expect(actorContext.actorType).toBe('human');
+    expect(actorContext.workspaceUser).toMatchObject({
+      profileId: 'profile-admin-1',
+      role: 'admin'
+    });
+  });
+
+  it('maps unauthenticated secret/dev activity to system', () => {
+    expect(
+      mapWorkspaceUserToOutboundActorContext({
+        authenticated: false,
+        role: 'rep',
+        roleSource: 'workspace-secret'
+      })
+    ).toMatchObject({
+      actorType: 'system',
+      workspaceUser: {
+        authenticated: false,
+        role: 'rep',
+        roleSource: 'workspace-secret'
+      }
+    });
   });
 });
 
@@ -310,6 +368,47 @@ describe('Quick Capture workflow dry-run safety', () => {
     expect(result.warnings).toContain(
       'Outbound schema issue: Missing outbound field "person.quickCaptureUrl".'
     );
+  });
+
+  it('persists authenticated workspace user details without invalid actor types', async () => {
+    const store = createMemoryOperationalStore();
+    const result = await processQuickCaptureLead({
+      input: sampleLead,
+      config: testConfig,
+      schemaOverride: outboundSchemaWithoutQuickCaptureUrl,
+      operationalStore: store,
+      persistEvents: true,
+      workspaceUser: {
+        authenticated: true,
+        userId: 'workspace-user-1',
+        email: 'rep@visiblegap.com',
+        fullName: 'Visible Gap Rep',
+        role: 'rep',
+        roleSource: 'profile',
+        profileId: 'profile-1'
+      },
+      now: new Date('2026-05-27T14:00:00.000Z')
+    });
+
+    expect(result.outboundEvent.planned.actorType).toBe('human');
+    expect(result.outboundEvent.planned.actorType).not.toBe('workspace_user');
+    expect(result.outboundEvent.planned.payload.workspaceUser).toMatchObject({
+      authenticated: true,
+      userId: 'workspace-user-1',
+      email: 'rep@visiblegap.com',
+      role: 'rep',
+      roleSource: 'profile',
+      profileId: 'profile-1'
+    });
+    expect(store.snapshot().outboundEvents[0]).toMatchObject({
+      actorType: 'human',
+      payload: {
+        workspaceUser: {
+          role: 'rep',
+          roleSource: 'profile'
+        }
+      }
+    });
   });
 });
 
