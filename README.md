@@ -205,17 +205,35 @@ Legacy task relationship retrofit dry-run:
 
 ```bash
 npm run queues:inspect-task-relationships
+npm run queues:inspect-task-relationships -- --summary
+npm run queues:inspect-task-relationships -- --limit=25
+npm run queues:inspect-task-relationships -- --person-id=<twenty-person-id>
+npm run queues:inspect-task-relationships -- --task-id=<twenty-task-id>
+npm run queues:inspect-task-relationships -- --json
+npm run queues:inspect-task-relationships -- --csv
 npm run legacy:tasks:plan
 npm run legacy:tasks:apply
 ```
 
 These scripts are read-only. The inspection script reports taskTargets,
 resolved Person/Company, owner, assignee, resolution path, queue bucket, and
-relationship gaps. The task planner identifies existing Tasks missing taskTarget
-relationships and recommends `link_task_to_person`, `link_task_to_company`,
-`leave_unassigned`, or `manual_review`. The apply command remains dry-run unless
-both live guards are enabled; in dry-run it prints the eligible taskTarget
-payloads without writing.
+relationship gaps. It now writes:
+
+- `data/task-relationship-summary.md`
+- `data/task-relationship-report.json`
+- `data/task-relationship-report.csv`
+
+Optional filters:
+
+```bash
+SHOW_ONLY_UNLINKED=true npm run queues:inspect-task-relationships -- --summary
+SHOW_ONLY_SAFE_LINKS=true npm run queues:inspect-task-relationships -- --summary
+```
+
+The task planner identifies existing Tasks missing taskTarget relationships and
+recommends `link_task_to_person`, `link_task_to_company`, `leave_unassigned`, or
+`manual_review`. The apply command remains dry-run unless both live guards are
+enabled; in dry-run it prints the eligible taskTarget payloads without writing.
 
 Guarded task relationship apply links existing Tasks to existing People only:
 
