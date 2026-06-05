@@ -59,7 +59,8 @@ describe('outbound queue workflow', () => {
       'follow-ups',
       'warm-assessments',
       'stale-recovery',
-      'pipeline-review'
+      'pipeline-review',
+      'unassigned-tasks'
     ]) {
       const response = await invokeQueueRoute({
         queueSlug,
@@ -264,12 +265,45 @@ describe('outbound queue workflow', () => {
     });
   });
 
-  it('returns unassigned task bucket metadata when no Person can be resolved', async () => {
+  it('excludes unassigned tasks from follow-ups by default and returns a hidden count warning', async () => {
     const result = await getOutboundQueueWorkflow({
       queueSlug: 'follow-ups',
       query: {
         ownerScope: 'all',
         dueBefore: '2026-06-04'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({
+        people: [],
+        tasks: [
+          {
+            id: 'tasks-unassigned',
+            title: 'Follow up with unknown lead',
+            status: 'TODO',
+            dueAt: '2026-06-04',
+            bodyV2: {
+              markdown: ['Cadence: RELATIONSHIP_BUILDING_V1', 'Next cadence stage: VALUE_TOUCH'].join('\n')
+            }
+          }
+        ]
+      }),
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+
+    expect(result.items).toHaveLength(0);
+    expect(result.warnings).toContain(
+      '1 unassigned tasks hidden. Review Unassigned Tasks queue.'
+    );
+  });
+
+  it('can include unassigned tasks in follow-ups when explicitly requested', async () => {
+    const result = await getOutboundQueueWorkflow({
+      queueSlug: 'follow-ups',
+      query: {
+        ownerScope: 'all',
+        dueBefore: '2026-06-04',
+        includeUnassigned: 'true'
       },
       config: baseConfig,
       workspaceUser: adminUser,
@@ -298,13 +332,151 @@ describe('outbound queue workflow', () => {
       suggestedResolutionActions: [
         'associate_person',
         'associate_company',
-        'accept_and_link',
-        'dismiss_from_my_view'
+        'dismiss_from_my_view',
+        'leave_unassigned'
       ]
     });
     expect(result.items[0].warnings).toContain(
       'Task does not expose a Person ID or parsable Person ID marker.'
     );
+  });
+
+  it('returns only unassigned tasks from the unassigned tasks queue', async () => {
+    const result = await getOutboundQueueWorkflow({
+      queueSlug: 'unassigned-tasks',
+      query: {
+        assigneeScope: 'all'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({
+        people: [
+          {
+            id: 'people-named',
+            name: {
+              firstName: 'Named',
+              lastName: 'Lead'
+            },
+            owner: {
+              userEmail: 'rep@visiblegap.com'
+            }
+          }
+        ],
+        tasks: [
+          {
+            id: 'tasks-unassigned',
+            title: 'Administrative follow-up',
+            status: 'TODO',
+            dueAt: '2026-06-07',
+            bodyV2: {
+              markdown: 'No person context yet. Needs review before associating.'
+            },
+            assignee: {
+              userEmail: 'rep@visiblegap.com',
+              name: 'Visible Gap Rep'
+            }
+          },
+          {
+            id: 'tasks-linked',
+            title: 'Linked task',
+            status: 'TODO',
+            dueAt: '2026-06-07'
+          },
+          {
+            id: 'tasks-inferred',
+            title: 'Follow up with Named Lead',
+            status: 'TODO',
+            dueAt: '2026-06-07'
+          }
+        ],
+        taskTargets: [
+          {
+            id: 'target-linked',
+            taskId: 'tasks-linked',
+            targetPersonId: 'people-named'
+          }
+        ]
+      }),
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+
+    expect(result.queueSlug).toBe('unassigned-tasks');
+    expect(result.items.map((item) => item.taskId)).toEqual(['tasks-unassigned']);
+    expect(result.items[0]).toMatchObject({
+      personId: null,
+      taskId: 'tasks-unassigned',
+      taskTitle: 'Administrative follow-up',
+      taskStatus: 'TODO',
+      taskDueDate: '2026-06-07',
+      assignedRep: 'rep@visiblegap.com',
+      source: 'twenty:task-unassigned',
+      suggestedResolutionActions: [
+        'associate_person',
+        'associate_company',
+        'dismiss_from_my_view',
+        'leave_unassigned'
+      ]
+    });
+    expect(result.items[0].taskBodyExcerpt).toContain('No person context yet.');
+    expect(result.items[0].warnings).toContain(
+      'Task has no taskTarget Person link and no confident inferred Person.'
+    );
+  });
+
+  it('filters unassigned tasks by assignee scope, status, due date, limit, and offset', async () => {
+    const result = await getOutboundQueueWorkflow({
+      queueSlug: 'unassigned-tasks',
+      query: {
+        assigneeScope: 'mine',
+        status: 'TODO',
+        dueBefore: '2026-06-05',
+        limit: 1,
+        offset: 1
+      },
+      config: baseConfig,
+      workspaceUser: repUser,
+      dataSource: fakeQueueDataSource({
+        people: [],
+        tasks: [
+          unassignedTask('tasks-owned-1', {
+            dueAt: '2026-06-04',
+            assignee: {
+              userEmail: 'rep@visiblegap.com'
+            }
+          }),
+          unassignedTask('tasks-owned-2', {
+            dueAt: '2026-06-05',
+            assignee: {
+              userEmail: 'rep@visiblegap.com'
+            }
+          }),
+          unassignedTask('tasks-other', {
+            dueAt: '2026-06-04',
+            assignee: {
+              userEmail: 'other@visiblegap.com'
+            }
+          }),
+          unassignedTask('tasks-done', {
+            status: 'DONE',
+            dueAt: '2026-06-04',
+            assignee: {
+              userEmail: 'rep@visiblegap.com'
+            }
+          }),
+          unassignedTask('tasks-later', {
+            dueAt: '2026-06-06',
+            assignee: {
+              userEmail: 'rep@visiblegap.com'
+            }
+          })
+        ]
+      }),
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+
+    expect(result.assigneeScope).toBe('mine');
+    expect(result.count).toBe(2);
+    expect(result.items.map((item) => item.taskId)).toEqual(['tasks-owned-2']);
   });
 });
 
@@ -579,6 +751,19 @@ function queueTasks() {
       }
     }
   ];
+}
+
+function unassignedTask(id, overrides = {}) {
+  return {
+    id,
+    title: `Unassigned task ${id}`,
+    status: 'TODO',
+    dueAt: '2026-06-04',
+    bodyV2: {
+      markdown: 'No Person ID marker or unique lead name.'
+    },
+    ...overrides
+  };
 }
 
 function createMockExchange({ headers = {}, query = {} } = {}) {

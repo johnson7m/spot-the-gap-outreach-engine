@@ -21,6 +21,7 @@ Current endpoints:
 - `GET /api/queues/warm-assessments`
 - `GET /api/queues/stale-recovery`
 - `GET /api/queues/pipeline-review`
+- `GET /api/queues/unassigned-tasks`
 
 All queue endpoints require Supabase workspace JWT auth and role `admin`,
 `operator`, or `rep`. Reps default to `ownerScope=mine`; admins and operators
@@ -93,8 +94,10 @@ Inclusion logic:
 - `dueAt` is today or overdue
 - Person cadence is not terminal
 - Person or parsed task body includes cadence context
-- unresolved due tasks may appear as `queueBucket=unassigned_tasks` with
-  suggested resolution actions instead of being hidden
+- unresolved due tasks are hidden by default and counted in the response warning
+  `N unassigned tasks hidden. Review Unassigned Tasks queue.`
+- `includeUnassigned=true` may be used for diagnostics, but the workspace should
+  not show unresolved Tasks as "Unknown person" in the normal Follow-Up Queue
 
 Priority logic:
 
@@ -146,6 +149,42 @@ Legacy task relationship cleanup:
   rows.
 - It does not create replacement Tasks, reopen completed Tasks, generate
   cadence Tasks, or change assessment webhook behavior.
+
+## Unassigned Tasks Queue
+
+Purpose: task hygiene review for existing Twenty Tasks that cannot be safely
+associated with a Person.
+
+Inclusion logic:
+
+- no `taskTarget.targetPersonId`
+- no high or medium confidence inferred Person
+- not already linked through `taskTargets`
+
+Supported filters:
+
+- `assigneeScope=mine|all`
+- `status`
+- `dueBefore`
+- `limit`
+- `offset`
+
+Displayed fields:
+
+- task ID, title, status, due date
+- assignee/member resolution
+- task body excerpt
+- existing taskTargets, including Company-only targets
+- suggested resolution actions:
+  `associate_person`, `associate_company`, `dismiss_from_my_view`,
+  `leave_unassigned`
+
+Rep/operator actions:
+
+- associate a Person after manual review
+- associate a Company after manual review
+- dismiss from personal view
+- intentionally leave unassigned for administrative/non-lead work
 
 ## Warm Assessment Queue
 

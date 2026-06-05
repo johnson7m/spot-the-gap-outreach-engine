@@ -8,7 +8,8 @@ const QUEUE_ROUTES = [
   ['follow-ups', '/follow-ups'],
   ['warm-assessments', '/warm-assessments'],
   ['stale-recovery', '/stale-recovery'],
-  ['pipeline-review', '/pipeline-review']
+  ['pipeline-review', '/pipeline-review'],
+  ['unassigned-tasks', '/unassigned-tasks']
 ];
 
 export function createQueueApiRouter({
@@ -78,6 +79,7 @@ export async function handleQueueFetch(
           limit: result.limit,
           offset: result.offset,
           ownerScope: result.ownerScope,
+          assigneeScope: result.assigneeScope,
           dataSource: result.dataSource,
           warnings: result.warnings
         },

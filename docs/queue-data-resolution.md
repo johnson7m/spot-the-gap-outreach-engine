@@ -129,9 +129,18 @@ Follow-Ups:
 - open task due today or overdue
 - non-terminal cadence
 - cadence name present
-- unresolved due tasks are returned with `queueBucket=unassigned_tasks` and
-  suggested resolution actions: `associate_person`, `associate_company`,
-  `accept_and_link`, and `dismiss_from_my_view`.
+- unresolved due tasks are excluded by default and counted in a warning:
+  `N unassigned tasks hidden. Review Unassigned Tasks queue.`
+- `includeUnassigned=true` can include unresolved tasks for diagnostics.
+
+Unassigned Tasks:
+
+- no `taskTarget.targetPersonId`
+- no high or medium confidence inferred Person
+- existing Company taskTargets can be displayed for context
+- suggested resolution actions: `associate_person`, `associate_company`,
+  `dismiss_from_my_view`, and `leave_unassigned`
+- supported filters: `assigneeScope`, `status`, `dueBefore`, `limit`, `offset`
 
 Warm Assessments:
 

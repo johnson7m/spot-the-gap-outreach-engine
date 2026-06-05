@@ -119,6 +119,7 @@ GET /api/queues/follow-ups
 GET /api/queues/warm-assessments
 GET /api/queues/stale-recovery
 GET /api/queues/pipeline-review
+GET /api/queues/unassigned-tasks
 ```
 
 Preview is dry-run only and is intended for the internal
@@ -284,15 +285,22 @@ GET /api/queues/follow-ups
 GET /api/queues/warm-assessments
 GET /api/queues/stale-recovery
 GET /api/queues/pipeline-review
+GET /api/queues/unassigned-tasks
 ```
 
 These endpoints are read-only. They require Supabase workspace JWT auth and role
 `admin`, `operator`, or `rep`; reps default to `ownerScope=mine`, while admins
-and operators can request `ownerScope=all`. Queue fetches read Twenty People and
-Tasks plus task targets, note targets, timeline activity, and workspace
-members. They return a normalized workspace item shape and include warnings when
-task relationships must be inferred from task body `Person ID` markers or when
+and operators can request `ownerScope=all`. The Unassigned Tasks queue uses
+`assigneeScope=mine|all` instead. Queue fetches read Twenty People and Tasks
+plus task targets, note targets, timeline activity, and workspace members. They
+return a normalized workspace item shape and include warnings when task
+relationships must be inferred from task body `Person ID` markers or when
 owner/assignee data is unavailable.
+
+Follow-Ups exclude unassigned Tasks by default and return a warning/count such
+as `22 unassigned tasks hidden. Review Unassigned Tasks queue.` The workspace
+should review those records through `GET /api/queues/unassigned-tasks` rather
+than showing them as "Unknown person" in the normal Follow-Up Queue.
 
 Workspace auth flags:
 

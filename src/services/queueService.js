@@ -18,6 +18,10 @@ const QUEUE_DEFINITIONS = {
   'pipeline-review': {
     slug: 'pipeline-review',
     name: 'Pipeline Review Queue'
+  },
+  'unassigned-tasks': {
+    slug: 'unassigned-tasks',
+    name: 'Unassigned Tasks Queue'
   }
 };
 
@@ -37,8 +41,8 @@ const STALE_RISK_VALUES = new Set(['STALE', 'HIGH']);
 const UNASSIGNED_TASK_ACTIONS = [
   'associate_person',
   'associate_company',
-  'accept_and_link',
-  'dismiss_from_my_view'
+  'dismiss_from_my_view',
+  'leave_unassigned'
 ];
 
 export function getQueueDefinition(queueSlug) {
@@ -90,9 +94,11 @@ export function buildQueue({
     tasks: normalizedTasks,
     tasksByPersonId,
     query: normalizedQuery,
+    warnings,
     now
   });
   const scopedItems = applyRoleScope({
+    queueSlug,
     items: candidates,
     workspaceUser,
     query: normalizedQuery,
@@ -111,6 +117,7 @@ export function buildQueue({
     limit: normalizedQuery.limit,
     offset: normalizedQuery.offset,
     ownerScope: normalizedQuery.ownerScope,
+    assigneeScope: normalizedQuery.assigneeScope,
     warnings: uniqueStrings(warnings)
   };
 }
@@ -126,25 +133,41 @@ export function normalizeQueueQuery(query = {}, workspaceUser = {}) {
   const dueBefore = normalizeDateInput(query.dueBefore) ?? new Date();
   const includeOverdue =
     query.includeOverdue === undefined ? true : normalizeBoolean(query.includeOverdue);
+  const includeUnassigned =
+    query.includeUnassigned === undefined ? false : normalizeBoolean(query.includeUnassigned);
   const requestedOwnerScope = normalizeSelect(query.requestedOwnerScope ?? query.ownerScope);
+  const requestedAssigneeScope = normalizeSelect(query.requestedAssigneeScope ?? query.assigneeScope);
   const ownerScope =
     role === 'rep'
       ? 'mine'
       : requestedOwnerScope === 'MINE'
         ? 'mine'
         : 'all';
+  const assigneeScope =
+    role === 'rep'
+      ? 'mine'
+      : requestedAssigneeScope === 'MINE'
+        ? 'mine'
+        : 'all';
+  const status = normalizeSelect(query.status);
 
   return {
     limit,
     offset,
     dueBefore,
+    dueBeforeProvided:
+      typeof query.dueBeforeProvided === 'boolean' ? query.dueBeforeProvided : Boolean(query.dueBefore),
     includeOverdue,
+    includeUnassigned,
     ownerScope,
-    requestedOwnerScope: requestedOwnerScope ? requestedOwnerScope.toLowerCase() : null
+    requestedOwnerScope: requestedOwnerScope ? requestedOwnerScope.toLowerCase() : null,
+    assigneeScope,
+    requestedAssigneeScope: requestedAssigneeScope ? requestedAssigneeScope.toLowerCase() : null,
+    status: status || null
   };
 }
 
-function selectQueueCandidates({ queueSlug, people, tasks, tasksByPersonId, query, now }) {
+function selectQueueCandidates({ queueSlug, people, tasks, tasksByPersonId, query, warnings, now }) {
   switch (queueSlug) {
     case 'fresh-leads':
       return people
@@ -157,8 +180,11 @@ function selectQueueCandidates({ queueSlug, people, tasks, tasksByPersonId, quer
         }));
 
     case 'follow-ups':
-      return tasks
-        .filter((task) => isDueOpenTask(task, query))
+      return filterFollowUpTasks({
+        tasks,
+        query,
+        warnings
+      })
         .map((task) => {
           const person = people.find((candidate) => candidate.personId === task.personId);
           return toQueueItem({
@@ -169,6 +195,12 @@ function selectQueueCandidates({ queueSlug, people, tasks, tasksByPersonId, quer
           });
         })
         .filter((item) => item.cadenceName && !isTerminalCadenceStage(item.cadenceStage));
+
+    case 'unassigned-tasks':
+      return tasks
+        .filter((task) => isUnassignedTask(task))
+        .filter((task) => matchesTaskFilters(task, query))
+        .map((task) => toUnassignedTaskQueueItem({ task }));
 
     case 'warm-assessments':
       return people
@@ -271,6 +303,7 @@ function normalizeTaskRecord({
     personId: personLink.personId,
     currentTargetPersonId: personLink.currentTargetPersonId,
     currentTargetCompanyId: personLink.currentTargetCompanyId,
+    existingTaskTargets: taskTargets,
     personLinkSource: personLink.source,
     personResolutionPath: personLink.path,
     personResolutionConfidence: personLink.confidence,
@@ -335,16 +368,52 @@ function toQueueItem({ person, task, source, itemWarnings = [] }) {
   };
 }
 
-function applyRoleScope({ items, workspaceUser = {}, query, warnings }) {
+function toUnassignedTaskQueueItem({ task }) {
+  return {
+    personId: null,
+    taskId: task.taskId,
+    title: null,
+    taskTitle: task.title,
+    taskStatus: task.status,
+    taskDueDate: task.dueDate,
+    assignee: task.assignee,
+    owner: task.assignee,
+    assignedRep: task.assignee?.email ?? task.assignee?.name ?? null,
+    assignedRepDetails: task.assignee ?? null,
+    memberResolution: task.assignee,
+    taskBodyExcerpt: excerpt(task.body),
+    existingTaskTargets: task.existingTaskTargets ?? [],
+    currentTargetPersonId: task.currentTargetPersonId ?? null,
+    currentTargetCompanyId: task.currentTargetCompanyId ?? null,
+    targetCompanyId: task.targetCompanyId ?? null,
+    personLinkSource: task.personLinkSource ?? null,
+    personResolutionPath: task.personResolutionPath ?? [],
+    personResolutionConfidence: task.personResolutionConfidence ?? null,
+    personResolutionEvidence: task.personResolutionEvidence ?? [],
+    queueBucket: 'unassigned_tasks',
+    suggestedResolutionActions: UNASSIGNED_TASK_ACTIONS,
+    source: 'twenty:task-unassigned',
+    warnings: uniqueStrings([
+      ...(task.warnings ?? []),
+      'Task has no taskTarget Person link and no confident inferred Person.'
+    ])
+  };
+}
+
+function applyRoleScope({ queueSlug, items, workspaceUser = {}, query, warnings }) {
   const role = workspaceUser.role ?? 'rep';
   const email = normalizeEmail(workspaceUser.email);
+  const scope = queueSlug === 'unassigned-tasks' ? query.assigneeScope : query.ownerScope;
+  const requestedScope =
+    queueSlug === 'unassigned-tasks' ? query.requestedAssigneeScope : query.requestedOwnerScope;
+  const scopeLabel = queueSlug === 'unassigned-tasks' ? 'assigneeScope' : 'ownerScope';
 
-  if (role !== 'rep' && query.ownerScope !== 'mine') {
+  if (role !== 'rep' && scope !== 'mine') {
     return items;
   }
 
-  if (role === 'rep' && query.requestedOwnerScope === 'all') {
-    warnings.push('Rep requests for ownerScope=all are treated as ownerScope=mine.');
+  if (role === 'rep' && requestedScope === 'all') {
+    warnings.push(`Rep requests for ${scopeLabel}=all are treated as ${scopeLabel}=mine.`);
   }
 
   if (!email) {
@@ -444,6 +513,45 @@ function isDueOpenTask(task, query) {
   }
 
   return toDateOnly(dueDate) === toDateOnly(query.dueBefore);
+}
+
+function filterFollowUpTasks({ tasks = [], query = {}, warnings = [] } = {}) {
+  const unassignedCount = tasks.filter(isUnassignedTask).length;
+
+  if (!query.includeUnassigned && unassignedCount > 0) {
+    warnings.push(`${unassignedCount} unassigned tasks hidden. Review Unassigned Tasks queue.`);
+  }
+
+  return tasks
+    .filter((task) => query.includeUnassigned || !isUnassignedTask(task))
+    .filter((task) => isDueOpenTask(task, query));
+}
+
+function isUnassignedTask(task) {
+  return !task.currentTargetPersonId && !hasConfidentPersonResolution(task);
+}
+
+function hasConfidentPersonResolution(task) {
+  return Boolean(
+    task.personId &&
+      ['high', 'medium'].includes(normalizeSelect(task.personResolutionConfidence).toLowerCase())
+  );
+}
+
+function matchesTaskFilters(task, query = {}) {
+  if (query.status && normalizeSelect(task.status) !== query.status) {
+    return false;
+  }
+
+  if (query.dueBeforeProvided) {
+    const dueDate = normalizeDateInput(task.dueDate);
+
+    if (!dueDate || dueDate.getTime() > endOfDay(query.dueBefore).getTime()) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function firstOpenTask(tasks = []) {
@@ -877,6 +985,12 @@ function getTaskBody(task) {
     task.description,
     task.note
   );
+}
+
+function excerpt(value, maxLength = 280) {
+  const normalized = String(value ?? '').replace(/\s+/g, ' ').trim();
+
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 3)}...` : normalized;
 }
 
 function getLinkUrl(fieldValue, flattenedValue, fallbackValue) {

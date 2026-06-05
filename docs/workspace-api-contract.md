@@ -99,6 +99,7 @@ Implemented endpoints:
 - `GET /api/queues/warm-assessments`
 - `GET /api/queues/stale-recovery`
 - `GET /api/queues/pipeline-review`
+- `GET /api/queues/unassigned-tasks`
 
 Planned endpoints:
 
@@ -481,6 +482,7 @@ Implemented endpoints:
 - `GET /api/queues/warm-assessments`
 - `GET /api/queues/stale-recovery`
 - `GET /api/queues/pipeline-review`
+- `GET /api/queues/unassigned-tasks`
 
 Auth:
 
@@ -502,9 +504,12 @@ Supported query params:
 - `limit`: 1-100, default 50.
 - `offset` or `cursor`: numeric offset for current page slicing.
 - `ownerScope`: `mine` or `all`; reps are forced to `mine`.
+- `assigneeScope`: `mine` or `all`; applies to `unassigned-tasks`; reps are forced to `mine`.
 - `dueBefore`: ISO date used by due/overdue queue logic.
 - `includeOverdue`: default `true`; `false` limits follow-ups to the selected
   due date.
+- `includeUnassigned`: default `false`; applies to Follow-Ups.
+- `status`: optional Task status filter for `unassigned-tasks`.
 
 Response:
 
@@ -566,6 +571,7 @@ Response:
     "limit": 50,
     "offset": 0,
     "ownerScope": "mine",
+    "assigneeScope": "mine",
     "dataSource": "twenty",
     "warnings": []
   },
@@ -587,9 +593,47 @@ Follow-Ups criteria:
 - Task due date is today or overdue according to `dueBefore`.
 - Person cadence is not terminal.
 - Person or parsed task body includes cadence context.
-- Tasks with no reliable Person are returned with `queueBucket=unassigned_tasks`
-  and suggested resolution actions. These are read-only hints; the workspace
-  should not link tasks until a separate relationship apply path is approved.
+- Tasks with no reliable Person are excluded by default.
+- The response includes a warning/count such as
+  `22 unassigned tasks hidden. Review Unassigned Tasks queue.`
+- `includeUnassigned=true` can include unresolved Tasks for diagnostics, but the
+  workspace should keep them out of the normal Follow-Up tab by default.
+
+Unassigned Tasks criteria:
+
+- Task does not expose `taskTarget.targetPersonId`.
+- Task does not have a high or medium confidence Person inference.
+- Existing Company taskTargets can be shown, but they do not make the Task a
+  Person-linked follow-up.
+
+Unassigned Task item fields:
+
+```json
+{
+  "taskId": "twenty-task-id",
+  "taskTitle": "LI - f/u pending connect",
+  "taskStatus": "TODO",
+  "taskDueDate": "2026-06-05",
+  "assignee": {
+    "email": "rep@visiblegap.com",
+    "name": "Visible Gap Rep",
+    "workspaceMemberId": "twenty-workspace-member-id"
+  },
+  "memberResolution": {
+    "email": "rep@visiblegap.com",
+    "name": "Visible Gap Rep"
+  },
+  "taskBodyExcerpt": "Short task body preview...",
+  "existingTaskTargets": [],
+  "suggestedResolutionActions": [
+    "associate_person",
+    "associate_company",
+    "dismiss_from_my_view",
+    "leave_unassigned"
+  ],
+  "warnings": []
+}
+```
 
 Warm Assessments criteria:
 
