@@ -157,6 +157,92 @@ enabled, Quick Capture attempts non-blocking links after core CRM writes:
 Relationship failures produce warnings and audit rows but do not fail an
 otherwise successful Quick Capture commit.
 
+Legacy lead retrofit dry-run:
+
+```bash
+npm run legacy:retrofit:plan
+```
+
+This inspects existing Twenty People, Tasks, task targets, note targets,
+timeline activity, workspace members, and legacy Person fields such as
+`eventCustom` and `leadStage`. It prints a recommended outbound-field retrofit
+plan and performs no CRM writes. Set `WRITE_LEGACY_RETROFIT_PLAN=true` only when
+you want to save the dry-run output to `data/legacy-retrofit-plan.json` and
+`data/legacy-retrofit-summary.md`. The plan includes owner resolution context
+per Person, uses `createdBy` as a dry-run fallback when Owner is missing, and
+keeps owner suggestions under `ownerRecommendation` instead of normal retrofit
+updates.
+
+Full legacy planning uses Twenty cursor pagination, not offset pagination.
+Twenty returns `pageInfo.endCursor` and the next page is requested with
+`starting_after=<endCursor>`. To fetch every Person before applying batches:
+
+```bash
+WRITE_LEGACY_RETROFIT_PLAN=true LEGACY_RETROFIT_ALL=true LEGACY_RETROFIT_PAGE_SIZE=100 LEGACY_RETROFIT_MAX_PAGES=10 npm run legacy:retrofit:plan
+```
+
+The generated summary distinguishes total records, already-retrofitted records,
+records still needing updates, safe updates, and manual-review records.
+
+Legacy retrofit apply dry-run:
+
+```bash
+npm run legacy:retrofit:apply
+```
+
+Live apply is guarded separately and updates only missing outbound fields for
+safe records by default. It excludes protected assessment fields and does not
+apply owner recommendations:
+
+```bash
+LEGACY_RETROFIT_APPLY_ENABLED=true LIVE_TEST=true LEGACY_RETROFIT_BATCH_SIZE=5 LEGACY_RETROFIT_OFFSET=0 npm run legacy:retrofit:apply
+```
+
+Apply batching is based on eligible records with non-empty
+`recommendedUpdates`; already-retrofitted records do not consume offset slots.
+
+Legacy task relationship retrofit dry-run:
+
+```bash
+npm run queues:inspect-task-relationships
+npm run legacy:tasks:plan
+npm run legacy:tasks:apply
+```
+
+These scripts are read-only. The inspection script reports taskTargets,
+resolved Person/Company, owner, assignee, resolution path, queue bucket, and
+relationship gaps. The task planner identifies existing Tasks missing taskTarget
+relationships and recommends `link_task_to_person`, `link_task_to_company`,
+`leave_unassigned`, or `manual_review`. The apply command remains dry-run unless
+both live guards are enabled; in dry-run it prints the eligible taskTarget
+payloads without writing.
+
+Guarded task relationship apply links existing Tasks to existing People only:
+
+```bash
+LEGACY_TASK_RETROFIT_APPLY_ENABLED=true LIVE_TEST=true LEGACY_TASK_RETROFIT_BATCH_SIZE=5 LEGACY_TASK_RETROFIT_OFFSET=0 npm run legacy:tasks:apply
+```
+
+The apply path selects only safe `link_task_to_person` candidates, avoids
+duplicate `taskTargets`, verifies the link after writing, and records
+`crm_sync_logs` plus `outbound_events` with
+`event_type=legacy_task_retrofit_applied`. It does not create replacement
+Tasks, reopen completed Tasks, create cadence Tasks, or alter assessment
+records. Company taskTarget links are disabled unless
+`LEGACY_TASK_LINK_COMPANY_ENABLED=true` is explicitly set.
+
+Legacy owner cleanup dry-run:
+
+```bash
+npm run legacy:owners:plan
+npm run legacy:owners:apply
+```
+
+Owner cleanup is separate from outbound retrofit. It uses the confirmed Person
+Owner REST shape `PATCH /rest/people/:personId` with `{ "ownerId":
+"<workspaceMemberId>" }`, skips existing owners by default, and verifies the
+Person owner after each guarded live write.
+
 Task completion endpoint:
 
 ```text
@@ -185,8 +271,9 @@ GET /api/queues/pipeline-review
 These endpoints are read-only. They require Supabase workspace JWT auth and role
 `admin`, `operator`, or `rep`; reps default to `ownerScope=mine`, while admins
 and operators can request `ownerScope=all`. Queue fetches read Twenty People and
-Tasks, return a normalized workspace item shape, and include warnings when task
-relationships must be inferred from task body `Person ID` markers or when
+Tasks plus task targets, note targets, timeline activity, and workspace
+members. They return a normalized workspace item shape and include warnings when
+task relationships must be inferred from task body `Person ID` markers or when
 owner/assignee data is unavailable.
 
 Workspace auth flags:
@@ -258,6 +345,8 @@ Useful docs:
 - `docs/cadence-engine-blueprint.md`
 - `docs/rep-queue-blueprint.md`
 - `docs/reporting-blueprint.md`
+- `docs/queue-data-resolution.md`
+- `docs/legacy-lead-retrofit-plan.md`
 
 ## Roadmap
 

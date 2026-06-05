@@ -540,10 +540,25 @@ Response:
           "id": "twenty-workspace-member-id",
           "email": "rep@visiblegap.com",
           "name": "Visible Gap Rep",
+          "workspaceMemberId": "twenty-workspace-member-id",
           "source": "person_owner_and_task_assignee"
         },
         "assignedRep": "rep@visiblegap.com",
+        "assignedRepDetails": {
+          "id": "twenty-workspace-member-id",
+          "email": "rep@visiblegap.com",
+          "name": "Visible Gap Rep",
+          "workspaceMemberId": "twenty-workspace-member-id",
+          "source": "task_assignee_workspace_member"
+        },
         "source": "twenty:person",
+        "personLinkSource": "task_target",
+        "personResolutionPath": ["taskTarget.targetPersonId"],
+        "personResolutionConfidence": "high",
+        "personResolutionEvidence": ["taskTarget.targetPersonId=twenty-person-id"],
+        "targetCompanyId": "twenty-company-id",
+        "queueBucket": null,
+        "suggestedResolutionActions": [],
         "warnings": []
       }
     ],
@@ -572,6 +587,9 @@ Follow-Ups criteria:
 - Task due date is today or overdue according to `dueBefore`.
 - Person cadence is not terminal.
 - Person or parsed task body includes cadence context.
+- Tasks with no reliable Person are returned with `queueBucket=unassigned_tasks`
+  and suggested resolution actions. These are read-only hints; the workspace
+  should not link tasks until a separate relationship apply path is approved.
 
 Warm Assessments criteria:
 

@@ -34,6 +34,12 @@ const WARM_DISCOVERY_STATUSES = new Set(['READY', 'REQUESTED', 'BOOKED']);
 const REVIEW_ENRICHMENT_STATUSES = new Set(['NEEDS_REVIEW', 'PARTIAL']);
 const FRESH_CADENCE_STAGES = new Set(['CONNECTION_REQUEST', 'NOT_STARTED']);
 const STALE_RISK_VALUES = new Set(['STALE', 'HIGH']);
+const UNASSIGNED_TASK_ACTIONS = [
+  'associate_person',
+  'associate_company',
+  'accept_and_link',
+  'dismiss_from_my_view'
+];
 
 export function getQueueDefinition(queueSlug) {
   return QUEUE_DEFINITIONS[queueSlug] ?? null;
@@ -43,6 +49,8 @@ export function buildQueue({
   queueSlug,
   people = [],
   tasks = [],
+  taskTargets = [],
+  workspaceMembers = [],
   workspaceUser = {},
   query = {},
   now = new Date()
@@ -57,12 +65,22 @@ export function buildQueue({
   }
 
   const normalizedQuery = normalizeQueueQuery(query, workspaceUser);
-  const normalizedTasks = tasks.map((task) => normalizeTaskRecord(task));
+  const workspaceMembersById = createWorkspaceMemberIndex(workspaceMembers);
+  const taskTargetsByTaskId = groupTaskTargetsByTaskId(taskTargets);
+  const normalizedTasks = tasks.map((task) =>
+    normalizeTaskRecord({
+      task,
+      taskTargets: taskTargetsByTaskId.get(String(task.id ?? '')) ?? [],
+      people,
+      workspaceMembersById
+    })
+  );
   const tasksByPersonId = groupTasksByPersonId(normalizedTasks);
   const normalizedPeople = people.map((person) =>
     normalizePersonRecord({
       person,
-      tasks: tasksByPersonId.get(String(person.id ?? '')) ?? []
+      tasks: tasksByPersonId.get(String(person.id ?? '')) ?? [],
+      workspaceMembersById
     })
   );
   const warnings = [];
@@ -197,8 +215,8 @@ function selectQueueCandidates({ queueSlug, people, tasks, tasksByPersonId, quer
   }
 }
 
-function normalizePersonRecord({ person = {}, tasks = [] } = {}) {
-  const owner = normalizeOwner(person, 'person');
+function normalizePersonRecord({ person = {}, tasks = [], workspaceMembersById = new Map() } = {}) {
+  const owner = normalizeOwner(person, 'person', workspaceMembersById);
   const openTasks = tasks.filter(isOpenTask);
 
   return {
@@ -231,16 +249,32 @@ function normalizePersonRecord({ person = {}, tasks = [] } = {}) {
   };
 }
 
-function normalizeTaskRecord(task = {}) {
+function normalizeTaskRecord({
+  task = {},
+  taskTargets = [],
+  people = [],
+  workspaceMembersById = new Map()
+} = {}) {
   const body = getTaskBody(task);
-  const personLink = getTaskPersonLink(task, body);
-  const assignee = normalizeOwner(task, 'task');
+  const personLink = resolveTaskPersonLink({
+    task,
+    body,
+    taskTargets,
+    people,
+    workspaceMembersById
+  });
+  const assignee = normalizeOwner(task, 'task', workspaceMembersById);
 
   return {
     raw: task,
     taskId: stringify(task.id),
     personId: personLink.personId,
+    currentTargetPersonId: personLink.currentTargetPersonId,
+    currentTargetCompanyId: personLink.currentTargetCompanyId,
     personLinkSource: personLink.source,
+    personResolutionPath: personLink.path,
+    personResolutionConfidence: personLink.confidence,
+    personResolutionEvidence: personLink.evidence,
     title: firstString(task.title, task.name, task.subject),
     dueDate: normalizeDateString(task.dueAt ?? task.dueDate ?? task.due_date),
     status: normalizeSelect(task.status),
@@ -254,9 +288,8 @@ function normalizeTaskRecord(task = {}) {
     latestTouchChannel: normalizeSelect(readMarkdownValue(body, 'Channel')),
     latestTouchStatus: normalizeSelect(readMarkdownValue(body, 'Latest touch status')),
     assignee,
-    warnings: personLink.source === 'task_body'
-      ? ['Task was associated by parsing Person ID from task body because relationship writes remain disabled.']
-      : []
+    targetCompanyId: personLink.companyId,
+    warnings: buildTaskLinkWarnings(personLink)
   };
 }
 
@@ -285,7 +318,15 @@ function toQueueItem({ person, task, source, itemWarnings = [] }) {
     taskStatus: task?.status ?? null,
     owner,
     assignedRep: owner?.email ?? owner?.name ?? null,
+    assignedRepDetails: owner?.taskAssignee ?? task?.assignee ?? null,
     source,
+    personLinkSource: task?.personLinkSource ?? null,
+    personResolutionPath: task?.personResolutionPath ?? [],
+    personResolutionConfidence: task?.personResolutionConfidence ?? null,
+    personResolutionEvidence: task?.personResolutionEvidence ?? [],
+    targetCompanyId: task?.targetCompanyId ?? null,
+    queueBucket: task && !task.personId ? 'unassigned_tasks' : null,
+    suggestedResolutionActions: task && !task.personId ? UNASSIGNED_TASK_ACTIONS : [],
     warnings: uniqueStrings([
       ...(person?.taskWarnings ?? []),
       ...(task?.warnings ?? []),
@@ -434,6 +475,39 @@ function groupTasksByPersonId(tasks) {
   return map;
 }
 
+function groupTaskTargetsByTaskId(taskTargets = []) {
+  const map = new Map();
+
+  for (const taskTarget of taskTargets ?? []) {
+    if (!taskTarget?.taskId) {
+      continue;
+    }
+
+    const key = String(taskTarget.taskId);
+    const existing = map.get(key) ?? [];
+    existing.push(taskTarget);
+    map.set(key, existing);
+  }
+
+  return map;
+}
+
+export function createWorkspaceMemberIndex(workspaceMembers = []) {
+  return new Map(
+    (workspaceMembers ?? [])
+      .filter((member) => member?.id)
+      .map((member) => [
+        String(member.id),
+        {
+          id: String(member.id),
+          email: normalizeEmail(member.userEmail ?? member.email ?? member.user?.email),
+          name: getWorkspaceMemberName(member),
+          userId: stringify(member.userId)
+        }
+      ])
+  );
+}
+
 function buildFreshLeadWarnings(person, tasks) {
   if (firstOpenTask(tasks)) {
     return [];
@@ -449,7 +523,7 @@ function buildTaskAssociationWarnings(task, person) {
     warnings.push('Task does not expose a Person ID or parsable Person ID marker.');
   }
 
-  if (task.personLinkSource === 'task_body') {
+  if (task.personLinkSource === 'task_body_marker') {
     warnings.push(
       'Task relationship fallback used: Person ID was parsed from task body while relationship writes remain disabled.'
     );
@@ -503,20 +577,74 @@ function createUnknownPersonFromTask(task) {
   };
 }
 
-function getTaskPersonLink(task, body) {
+export function resolveTaskPersonLink({
+  task = {},
+  body = '',
+  taskTargets = [],
+  people = [],
+  workspaceMembersById = new Map()
+} = {}) {
+  const embeddedTaskTargets = Array.isArray(task.taskTargets) ? task.taskTargets : [];
+  const text = normalizeSearchText(`${firstString(task.title, task.name, task.subject)} ${body}`);
+  const targetPersonId = firstString(
+    ...taskTargets.map((target) => getTaskTargetPersonId(target))
+  );
+  const targetCompanyId = firstString(
+    ...taskTargets.map((target) => getTaskTargetCompanyId(target))
+  );
+  const embeddedTargetPersonId = firstString(
+    ...embeddedTaskTargets.map((target) => getTaskTargetPersonId(target))
+  );
+  const embeddedTargetCompanyId = firstString(
+    ...embeddedTaskTargets.map((target) => getTaskTargetCompanyId(target))
+  );
+
+  if (targetPersonId) {
+    return {
+      personId: targetPersonId,
+      companyId: targetCompanyId || null,
+      currentTargetPersonId: targetPersonId,
+      currentTargetCompanyId: targetCompanyId || null,
+      source: 'task_target',
+      path: ['taskTarget.targetPersonId'],
+      confidence: 'high',
+      evidence: [`taskTarget.targetPersonId=${targetPersonId}`],
+      warnings: []
+    };
+  }
+
+  if (embeddedTargetPersonId) {
+    return {
+      personId: embeddedTargetPersonId,
+      companyId: embeddedTargetCompanyId || targetCompanyId || null,
+      currentTargetPersonId: embeddedTargetPersonId,
+      currentTargetCompanyId: embeddedTargetCompanyId || targetCompanyId || null,
+      source: 'task_expanded_relation',
+      path: ['task.taskTargets expanded relation'],
+      confidence: 'high',
+      evidence: [`task.taskTargets target person=${embeddedTargetPersonId}`],
+      warnings: []
+    };
+  }
+
   const explicitId = firstString(
     task.personId,
     task.person?.id,
     task.people?.[0]?.id,
-    task.taskTargets?.[0]?.personId,
-    task.taskTargets?.[0]?.person?.id,
-    task.taskTargets?.[0]?.targetObjectId
+    task.targetPersonId
   );
 
   if (explicitId) {
     return {
       personId: explicitId,
-      source: 'task_field'
+      companyId: targetCompanyId || embeddedTargetCompanyId || null,
+      currentTargetPersonId: null,
+      currentTargetCompanyId: targetCompanyId || embeddedTargetCompanyId || null,
+      source: 'task_field',
+      path: ['task.personId'],
+      confidence: 'high',
+      evidence: [`task person field=${explicitId}`],
+      warnings: []
     };
   }
 
@@ -525,14 +653,183 @@ function getTaskPersonLink(task, body) {
   if (bodyPersonId) {
     return {
       personId: bodyPersonId,
-      source: 'task_body'
+      companyId: targetCompanyId || embeddedTargetCompanyId || null,
+      currentTargetPersonId: null,
+      currentTargetCompanyId: targetCompanyId || embeddedTargetCompanyId || null,
+      source: 'task_body_marker',
+      path: ['task body Person ID marker'],
+      confidence: 'medium',
+      evidence: [`body Person ID marker=${bodyPersonId}`],
+      warnings: [
+        'Task relationship fallback used: Person ID was parsed from task body because no taskTarget Person link was found.'
+      ]
+    };
+  }
+
+  const personNameMatch = findUniquePersonMatchByName(people, text);
+
+  if (personNameMatch) {
+    return {
+      personId: String(personNameMatch.id),
+      companyId: getCompanyId(personNameMatch) || targetCompanyId || embeddedTargetCompanyId || null,
+      currentTargetPersonId: null,
+      currentTargetCompanyId: targetCompanyId || embeddedTargetCompanyId || null,
+      source: 'task_person_name_match',
+      path: ['task title/body person-name matching'],
+      confidence: 'medium',
+      evidence: [`Task text matched Person name: ${getPersonName(personNameMatch)}`],
+      warnings: [
+        'Task relationship inference used Person name matching; review before writing taskTarget relationships.'
+      ]
+    };
+  }
+
+  const companyMatch = findUniquePersonMatchByCompany(
+    people,
+    text,
+    targetCompanyId || embeddedTargetCompanyId
+  );
+
+  if (companyMatch) {
+    return {
+      personId: String(companyMatch.id),
+      companyId: getCompanyId(companyMatch) || targetCompanyId || embeddedTargetCompanyId || null,
+      currentTargetPersonId: null,
+      currentTargetCompanyId: targetCompanyId || embeddedTargetCompanyId || null,
+      source: 'task_company_match',
+      path: ['task title/body company matching'],
+      confidence: 'low',
+      evidence: [`Task text or target matched Company: ${getCompanyName(companyMatch)}`],
+      warnings: [
+        'Task relationship inference used Company matching only; manual review recommended before linking.'
+      ]
+    };
+  }
+
+  const ownerAssigneeMatch = findUniquePersonMatchByOwnerOrAssignee({
+    task,
+    people,
+    workspaceMembersById
+  });
+
+  if (ownerAssigneeMatch) {
+    return {
+      personId: String(ownerAssigneeMatch.id),
+      companyId: getCompanyId(ownerAssigneeMatch) || targetCompanyId || embeddedTargetCompanyId || null,
+      currentTargetPersonId: null,
+      currentTargetCompanyId: targetCompanyId || embeddedTargetCompanyId || null,
+      source: 'task_owner_assignee_match',
+      path: ['owner/assignee matching'],
+      confidence: 'low',
+      evidence: ['Task assignee/owner matched a unique Person owner.'],
+      warnings: [
+        'Task relationship inference used owner/assignee matching only; manual review recommended before linking.'
+      ]
     };
   }
 
   return {
     personId: null,
-    source: null
+    companyId: targetCompanyId || embeddedTargetCompanyId || null,
+    currentTargetPersonId: null,
+    currentTargetCompanyId: targetCompanyId || embeddedTargetCompanyId || null,
+    source: null,
+    path: ['fallback_unknown'],
+    confidence: 'unknown',
+    evidence: [],
+    warnings: []
   };
+}
+
+function buildTaskLinkWarnings(personLink) {
+  if (personLink.warnings?.length) {
+    return personLink.warnings;
+  }
+
+  if (personLink.source === 'task_target') {
+    return [];
+  }
+
+  if (personLink.companyId && !personLink.personId) {
+    return ['Task target exposes Company but no Person; Person context is unavailable.'];
+  }
+
+  return [];
+}
+
+function getTaskTargetPersonId(target = {}) {
+  return firstString(
+    target.targetPersonId,
+    target.personId,
+    target.person?.id,
+    target.targetPerson?.id,
+    target.people?.[0]?.id,
+    target.targetObjectNameSingular === 'person' ? target.targetObjectId : null
+  );
+}
+
+function getTaskTargetCompanyId(target = {}) {
+  return firstString(
+    target.targetCompanyId,
+    target.companyId,
+    target.company?.id,
+    target.targetCompany?.id,
+    target.companies?.[0]?.id,
+    target.targetObjectNameSingular === 'company' ? target.targetObjectId : null
+  );
+}
+
+function findUniquePersonMatchByName(people = [], text = '') {
+  if (!text) {
+    return null;
+  }
+
+  const matches = people.filter((person) => {
+    const name = normalizeSearchText(getPersonName(person));
+    return name.length >= 5 && text.includes(name);
+  });
+
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function findUniquePersonMatchByCompany(people = [], text = '', companyId) {
+  if (companyId) {
+    const matches = people.filter((person) => getCompanyId(person) === companyId);
+    return matches.length === 1 ? matches[0] : null;
+  }
+
+  if (!text) {
+    return null;
+  }
+
+  const matches = people.filter((person) => {
+    const companyName = normalizeSearchText(getCompanyName(person));
+    return companyName.length >= 4 && text.includes(companyName);
+  });
+
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function findUniquePersonMatchByOwnerOrAssignee({ task = {}, people = [], workspaceMembersById } = {}) {
+  const taskOwner = normalizeOwner(task, 'task', workspaceMembersById);
+
+  if (!taskOwner?.id && !taskOwner?.email) {
+    return null;
+  }
+
+  const matches = people.filter((person) => {
+    const personOwner = normalizeOwner(person, 'person', workspaceMembersById);
+    return (
+      (taskOwner.id && taskOwner.id === personOwner?.id) ||
+      (taskOwner.email && taskOwner.email === personOwner?.email)
+    );
+  });
+
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function getCompanyId(person = {}) {
+  return stringify(person.companyId ?? person.company?.id ?? person.companyID);
 }
 
 function getPersonName(person) {
@@ -592,25 +889,42 @@ function getLinkUrl(fieldValue, flattenedValue, fallbackValue) {
   );
 }
 
-function normalizeOwner(record, recordType) {
+export function normalizeOwner(record, recordType, workspaceMembersById = new Map()) {
   const candidates =
     recordType === 'task'
       ? [record.assignee, record.owner, record.workspaceMember]
       : [record.owner, record.accountOwner, record.assignee, record.workspaceMember];
 
   const source = candidates.find(Boolean) ?? {};
+  const candidateId = firstString(
+    source.id,
+    source.workspaceMemberId,
+    source.context?.workspaceMemberId,
+    record.ownerId,
+    record.assigneeId,
+    record.accountOwnerId
+  );
+  const workspaceMember = candidateId ? workspaceMembersById.get(candidateId) : null;
   const email = normalizeEmail(
     firstString(
       source.userEmail,
       source.email,
+      source.user?.email,
       source.primaryEmail,
+      workspaceMember?.email,
       record.ownerEmail,
       record.assigneeEmail,
       record.accountOwnerEmail
     )
   );
-  const name = firstString(source.name, source.fullName, source.displayName, record.ownerName);
-  const id = firstString(source.id, record.ownerId, record.assigneeId, record.accountOwnerId);
+  const name = firstString(
+    getOwnerSourceName(source),
+    source.fullName,
+    source.displayName,
+    workspaceMember?.name,
+    record.ownerName
+  );
+  const id = candidateId;
 
   if (!email && !name && !id) {
     return null;
@@ -620,8 +934,44 @@ function normalizeOwner(record, recordType) {
     id: id || null,
     email: email || null,
     name: name || null,
-    source: recordType === 'task' ? 'task_assignee' : 'person_owner'
+    workspaceMemberId: workspaceMember?.id ?? id ?? null,
+    source: workspaceMember
+      ? recordType === 'task'
+        ? 'task_assignee_workspace_member'
+        : 'person_owner_workspace_member'
+      : recordType === 'task'
+        ? 'task_assignee'
+        : 'person_owner'
   };
+}
+
+function getWorkspaceMemberName(member) {
+  if (!member) {
+    return '';
+  }
+
+  if (typeof member.name === 'string') {
+    return member.name;
+  }
+
+  return firstString(
+    member.name?.fullName,
+    [member.name?.firstName, member.name?.lastName].filter(Boolean).join(' '),
+    member.displayName
+  );
+}
+
+function getOwnerSourceName(source = {}) {
+  if (typeof source.name === 'string') {
+    return source.name;
+  }
+
+  return firstString(
+    source.name?.fullName,
+    [source.name?.firstName, source.name?.lastName].filter(Boolean).join(' '),
+    source.fullName,
+    source.displayName
+  );
 }
 
 function mergeOwnerContexts(personOwner, taskAssignee) {
@@ -688,6 +1038,13 @@ function normalizeSelect(value) {
 
 function normalizeEmail(value) {
   return String(value ?? '').trim().toLowerCase();
+}
+
+function normalizeSearchText(value) {
+  return String(value ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
 }
 
 function normalizeNumber(value) {

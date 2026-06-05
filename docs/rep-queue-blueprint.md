@@ -93,6 +93,8 @@ Inclusion logic:
 - `dueAt` is today or overdue
 - Person cadence is not terminal
 - Person or parsed task body includes cadence context
+- unresolved due tasks may appear as `queueBucket=unassigned_tasks` with
+  suggested resolution actions instead of being hidden
 
 Priority logic:
 
@@ -130,6 +132,20 @@ Task completion behavior:
   and cadence context.
 - Duplicate next tasks are avoided by a dedupe key built from Person ID,
   cadence name, next cadence stage, and task type.
+
+Legacy task relationship cleanup:
+
+- Queue diagnostics and `npm run legacy:tasks:plan` identify existing Tasks
+  that can be safely linked to existing People through `taskTargets`.
+- `npm run legacy:tasks:apply` is dry-run by default and prints the planned
+  `POST /rest/taskTargets` payloads.
+- Live apply is separate from task completion and requires
+  `LEGACY_TASK_RETROFIT_APPLY_ENABLED=true` plus `LIVE_TEST=true`.
+- The apply path links only eligible `link_task_to_person` candidates, verifies
+  the link after writing, avoids duplicate taskTargets, and writes audit/event
+  rows.
+- It does not create replacement Tasks, reopen completed Tasks, generate
+  cadence Tasks, or change assessment webhook behavior.
 
 ## Warm Assessment Queue
 

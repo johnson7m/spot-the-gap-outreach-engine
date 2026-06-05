@@ -161,7 +161,149 @@ describe('outbound queue workflow', () => {
     const freshLead = result.items.find((item) => item.personId === 'people-fresh');
 
     expect(freshLead.warnings).toContain(
-      'Task was associated by parsing Person ID from task body because relationship writes remain disabled.'
+      'Task relationship fallback used: Person ID was parsed from task body because no taskTarget Person link was found.'
+    );
+  });
+
+  it('uses taskTargets to resolve task-person links without fallback warnings', async () => {
+    const result = await getOutboundQueueWorkflow({
+      queueSlug: 'fresh-leads',
+      query: {},
+      config: baseConfig,
+      workspaceUser: repUser,
+      dataSource: fakeQueueDataSource({
+        taskTargets: [
+          {
+            id: 'task-target-fresh',
+            taskId: 'tasks-fresh',
+            targetPersonId: 'people-fresh',
+            targetCompanyId: 'company-fresh'
+          }
+        ]
+      }),
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+
+    const freshLead = result.items.find((item) => item.personId === 'people-fresh');
+
+    expect(freshLead.taskId).toBe('tasks-fresh');
+    expect(freshLead.personLinkSource).toBe('task_target');
+    expect(freshLead.personResolutionPath).toEqual(['taskTarget.targetPersonId']);
+    expect(freshLead.warnings).not.toContain(
+      'Task relationship fallback used: Person ID was parsed from task body because no taskTarget Person link was found.'
+    );
+    expect(freshLead.warnings).not.toContain(
+      'No open task found for this fresh lead; task relationship may be unavailable.'
+    );
+  });
+
+  it('maps owner and task assignee IDs to workspace member emails', async () => {
+    const result = await getOutboundQueueWorkflow({
+      queueSlug: 'fresh-leads',
+      query: {},
+      config: baseConfig,
+      workspaceUser: repUser,
+      dataSource: fakeQueueDataSource({
+        people: [
+          {
+            id: 'people-member-owned',
+            name: {
+              firstName: 'Member',
+              lastName: 'Owned'
+            },
+            company: {
+              name: 'Owner Mapping Co'
+            },
+            outboundPipelineType: 'RELATIONSHIP_BUILDING',
+            cadenceName: 'RELATIONSHIP_BUILDING_V1',
+            cadenceStage: 'CONNECTION_REQUEST',
+            latestTouchStatus: 'DRAFTED',
+            ownerId: 'workspace-member-rep'
+          }
+        ],
+        tasks: [
+          {
+            id: 'tasks-member-owned',
+            title: 'Send relationship-oriented connection request',
+            status: 'TODO',
+            dueAt: '2026-06-04',
+            personId: 'people-member-owned',
+            assigneeId: 'workspace-member-rep'
+          }
+        ],
+        workspaceMembers: [
+          {
+            id: 'workspace-member-rep',
+            userEmail: 'rep@visiblegap.com',
+            name: {
+              firstName: 'Visible Gap',
+              lastName: 'Rep'
+            }
+          }
+        ]
+      }),
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0].owner).toMatchObject({
+      id: 'workspace-member-rep',
+      email: 'rep@visiblegap.com',
+      workspaceMemberId: 'workspace-member-rep',
+      source: 'person_owner_and_task_assignee',
+      taskAssignee: {
+        id: 'workspace-member-rep',
+        email: 'rep@visiblegap.com',
+        workspaceMemberId: 'workspace-member-rep',
+        source: 'task_assignee_workspace_member'
+      }
+    });
+    expect(result.items[0].assignedRepDetails).toMatchObject({
+      email: 'rep@visiblegap.com',
+      workspaceMemberId: 'workspace-member-rep'
+    });
+  });
+
+  it('returns unassigned task bucket metadata when no Person can be resolved', async () => {
+    const result = await getOutboundQueueWorkflow({
+      queueSlug: 'follow-ups',
+      query: {
+        ownerScope: 'all',
+        dueBefore: '2026-06-04'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({
+        people: [],
+        tasks: [
+          {
+            id: 'tasks-unassigned',
+            title: 'Follow up with unknown lead',
+            status: 'TODO',
+            dueAt: '2026-06-04',
+            bodyV2: {
+              markdown: ['Cadence: RELATIONSHIP_BUILDING_V1', 'Next cadence stage: VALUE_TOUCH'].join('\n')
+            }
+          }
+        ]
+      }),
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]).toMatchObject({
+      taskId: 'tasks-unassigned',
+      personId: null,
+      queueBucket: 'unassigned_tasks',
+      suggestedResolutionActions: [
+        'associate_person',
+        'associate_company',
+        'accept_and_link',
+        'dismiss_from_my_view'
+      ]
+    });
+    expect(result.items[0].warnings).toContain(
+      'Task does not expose a Person ID or parsable Person ID marker.'
     );
   });
 });
@@ -247,13 +389,17 @@ async function invokeQueueRoute({
   return res;
 }
 
-function fakeQueueDataSource() {
+function fakeQueueDataSource(overrides = {}) {
   return {
     provider: 'fake-twenty',
     async listQueueRecords() {
       return {
-        people: queuePeople(),
-        tasks: queueTasks(),
+        people: overrides.people ?? queuePeople(),
+        tasks: overrides.tasks ?? queueTasks(),
+        taskTargets: overrides.taskTargets ?? [],
+        noteTargets: overrides.noteTargets ?? [],
+        timelineActivities: overrides.timelineActivities ?? [],
+        workspaceMembers: overrides.workspaceMembers ?? [],
         warnings: []
       };
     }
