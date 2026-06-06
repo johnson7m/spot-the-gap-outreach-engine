@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import sampleAssessment from '../data/sample-netlify-assessment-submission.json' with { type: 'json' };
+import {
+  clearTwentyQueueReadCache,
+  createTwentyQueueDataSource
+} from '../src/integrations/twenty/queueDataSource.js';
 import { processAssessmentSubmission } from '../src/workflows/assessmentWorkflow.js';
 import {
   applyMissingNextTaskPlan,
@@ -164,6 +168,61 @@ describe('missing next-task apply workflow', () => {
       skippedReason: 'Open Task already exists for Person.'
     });
     expect(restClient.created).toEqual([]);
+  });
+
+  it('does not use queue read cache during apply duplicate checks', async () => {
+    clearTwentyQueueReadCache();
+
+    const cachedQueueSource = createTwentyQueueDataSource({
+      config: {
+        apiKey: 'test-key'
+      },
+      queueRead: {
+        cacheEnabled: true,
+        retryEnabled: false
+      },
+      restClient: fakeEmptyQueueRestClient()
+    });
+    await cachedQueueSource.listAllQueueRecords({
+      query: {
+        ownerScope: 'all'
+      }
+    });
+
+    const restClient = fakeTaskClient({
+      tasks: [
+        {
+          id: 'task-existing-open',
+          title: 'Existing open task',
+          status: 'TODO',
+          bodyV2: {
+            markdown: 'Person ID: person-safe-1'
+          }
+        }
+      ]
+    });
+    const result = await applyMissingNextTaskPlan({
+      plan: fakeMissingNextTaskPlan({
+        plans: [safePlanRecord('person-safe-1')]
+      }),
+      config: baseConfig(),
+      restClient,
+      operationalStore: fakeOperationalStore(),
+      options: {
+        applyEnabled: true,
+        liveTest: true,
+        batchSize: 1,
+        offset: 0
+      }
+    });
+
+    expect(result.operations[0]).toMatchObject({
+      status: 'skipped',
+      skippedReason: 'Open Task already exists for Person.'
+    });
+    expect(restClient.created).toEqual([]);
+
+    clearTwentyQueueReadCache();
   });
 
   it('avoids duplicate Task creation when the dedupe key already exists', async () => {
@@ -459,6 +518,27 @@ function fakeTaskClient({ tasks = [], taskTargets = [], persistTaskTargets = tru
       }
 
       return record;
+    }
+  };
+}
+
+function fakeEmptyQueueRestClient() {
+  return {
+    async listAllRecords(objectPlural) {
+      return {
+        records: [],
+        warnings: [],
+        pagination: {
+          objectPlural,
+          pagesFetched: 1,
+          totalFetched: 0,
+          totalCount: 0,
+          hasMore: false
+        }
+      };
+    },
+    async listRecords() {
+      return [];
     }
   };
 }

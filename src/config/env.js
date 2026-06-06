@@ -63,6 +63,11 @@ const envSchema = z.object({
   LEGACY_TASK_LINK_COMPANY_ENABLED: booleanFromEnv.default(false),
   QUICK_CAPTURE_MAX_RETRIES: z.coerce.number().int().min(0).default(3),
   QUICK_CAPTURE_RETRY_BASE_MS: z.coerce.number().int().min(0).default(1000),
+  QUEUE_READ_RETRY_ENABLED: booleanFromEnv.default(true),
+  QUEUE_READ_RETRY_MAX_ATTEMPTS: z.coerce.number().int().positive().default(2),
+  QUEUE_READ_RETRY_BASE_MS: z.coerce.number().int().min(0).default(500),
+  QUEUE_READ_CACHE_ENABLED: booleanFromEnv.default(true),
+  QUEUE_READ_CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(90),
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_MODEL: z.string().optional().default('')
 });
@@ -150,6 +155,13 @@ export function loadConfig() {
       batchSize: parsed.data.LEGACY_TASK_RETROFIT_BATCH_SIZE,
       offset: parsed.data.LEGACY_TASK_RETROFIT_OFFSET,
       linkCompany: parsed.data.LEGACY_TASK_LINK_COMPANY_ENABLED
+    },
+    queueRead: {
+      retryEnabled: parsed.data.QUEUE_READ_RETRY_ENABLED,
+      retryMaxAttempts: parsed.data.QUEUE_READ_RETRY_MAX_ATTEMPTS,
+      retryBaseMs: parsed.data.QUEUE_READ_RETRY_BASE_MS,
+      cacheEnabled: parsed.data.QUEUE_READ_CACHE_ENABLED,
+      cacheTtlSeconds: parsed.data.QUEUE_READ_CACHE_TTL_SECONDS
     },
     openai: {
       apiKey: parsed.data.OPENAI_API_KEY,

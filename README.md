@@ -385,6 +385,23 @@ for diagnostics. Broad `timelineActivities` pagination noise is moved to
 `data.diagnostics.timelinePaginationWarning` instead of normal top-level queue
 warnings.
 
+Queue reads distinguish degraded data from true empty queues. Critical reads
+are People, Tasks, TaskTargets, and WorkspaceMembers when rep scoping requires
+owner/assignee enforcement. If Twenty rate-limits a critical read, the response
+sets `data.status="degraded_rate_limited"`, `data.isPartial=true`,
+`data.partialReason="twenty_rate_limited"`, `data.retryAfterSeconds` when
+available, and `data.count=null`. If a recent successful read is cached, the
+engine returns `data.status="stale_cache"` with cache diagnostics instead of an
+empty queue. Queue retry/cache settings:
+
+```bash
+QUEUE_READ_RETRY_ENABLED=true
+QUEUE_READ_RETRY_MAX_ATTEMPTS=2
+QUEUE_READ_RETRY_BASE_MS=500
+QUEUE_READ_CACHE_ENABLED=true
+QUEUE_READ_CACHE_TTL_SECONDS=90
+```
+
 Fresh vs Follow-Up classification:
 
 - Fresh Leads own first-touch work: `NOT_STARTED` or `CONNECTION_REQUEST`

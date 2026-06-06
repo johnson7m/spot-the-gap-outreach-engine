@@ -15,8 +15,37 @@ Queue endpoints read these Twenty objects:
 - `timelineActivities`
 - `workspaceMembers`
 
-The queue data source treats individual read failures as warnings where
-possible. A missing optional object should not block all queue visibility.
+The queue data source separates critical and non-critical read failures. A
+missing optional object should not block all queue visibility. A failed critical
+read should never be presented as a true empty queue.
+
+Critical reads:
+
+- `people`
+- `tasks`
+- `taskTargets`
+- `workspaceMembers`, when `ownerScope=mine` or `assigneeScope=mine` requires
+  owner/assignee enforcement
+
+Non-critical reads:
+
+- `noteTargets`
+- `timelineActivities`
+
+Queue read status values:
+
+- `ok`: critical reads succeeded.
+- `degraded_rate_limited`: at least one critical read returned Twenty 429. The
+  API returns `count=null`, `isPartial=true`,
+  `partialReason=twenty_rate_limited`, and `retryAfterSeconds` when available.
+- `stale_cache`: a critical read was rate-limited, but a recent successful
+  queue source snapshot was available and returned with cache diagnostics.
+
+Workspace UI should show a temporary rate-limit/degraded message for
+`degraded_rate_limited` instead of treating `items=[]` as a real empty queue.
+The engine can retry transient Twenty `429`, `502`, `503`, and `504` responses
+with bounded attempts and can serve a 60-120 second queue cache for read-only
+workspace queues. The cache is not used by apply/write scripts.
 
 ## Task Relationship Resolution
 

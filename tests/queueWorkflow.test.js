@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import sampleAssessment from '../data/sample-netlify-assessment-submission.json' with { type: 'json' };
 import { requireWorkspaceAuth } from '../src/middleware/supabaseWorkspaceAuth.js';
+import {
+  clearTwentyQueueReadCache,
+  createTwentyQueueDataSource
+} from '../src/integrations/twenty/queueDataSource.js';
 import { handleQueueFetch } from '../src/routes/api/queueRoutes.js';
 import { processAssessmentSubmission } from '../src/workflows/assessmentWorkflow.js';
 import { getOutboundQueueWorkflow } from '../src/workflows/outbound/getQueueWorkflow.js';
@@ -706,6 +710,227 @@ describe('outbound queue workflow', () => {
     );
   });
 
+  it('does not return empty success when a critical People read is rate-limited', async () => {
+    const result = await getOutboundQueueWorkflow({
+      queueSlug: 'fresh-leads',
+      query: {},
+      config: {
+        ...baseConfig,
+        queueRead: {
+          retryEnabled: false,
+          cacheEnabled: false
+        }
+      },
+      workspaceUser: repUser,
+      dataSource: createTwentyQueueDataSource({
+        config: {
+          apiKey: 'test-key'
+        },
+        queueRead: {
+          retryEnabled: false,
+          cacheEnabled: false
+        },
+        restClient: fakeTwentyQueueRestClient({
+          failures: {
+            people: httpError(429, 'People rate limited', { retryAfter: 3 })
+          }
+        })
+      }),
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+
+    expect(result).toMatchObject({
+      status: 'degraded_rate_limited',
+      isPartial: true,
+      partialReason: 'twenty_rate_limited',
+      retryAfterSeconds: 3,
+      count: null,
+      items: []
+    });
+    expect(result.warnings).toContain('Queue data is temporarily rate-limited by Twenty. Retry shortly.');
+  });
+
+  it('does not return empty success when critical taskTargets are rate-limited', async () => {
+    const result = await getOutboundQueueWorkflow({
+      queueSlug: 'follow-ups',
+      query: {},
+      config: {
+        ...baseConfig,
+        queueRead: {
+          retryEnabled: false,
+          cacheEnabled: false
+        }
+      },
+      workspaceUser: repUser,
+      dataSource: createTwentyQueueDataSource({
+        config: {
+          apiKey: 'test-key'
+        },
+        queueRead: {
+          retryEnabled: false,
+          cacheEnabled: false
+        },
+        restClient: fakeTwentyQueueRestClient({
+          failures: {
+            taskTargets: httpError(429, 'Task targets rate limited')
+          }
+        })
+      }),
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+
+    expect(result).toMatchObject({
+      status: 'degraded_rate_limited',
+      isPartial: true,
+      partialReason: 'twenty_rate_limited',
+      count: null,
+      items: []
+    });
+    expect(result.diagnostics.queueReadStatus.criticalFailures).toEqual([
+      expect.objectContaining({
+        objectPlural: 'taskTargets',
+        httpStatus: 429
+      })
+    ]);
+  });
+
+  it('keeps non-critical timelineActivities failures as partial warnings only', async () => {
+    const result = await getOutboundQueueWorkflow({
+      queueSlug: 'fresh-leads',
+      query: {
+        ownerScope: 'all'
+      },
+      config: {
+        ...baseConfig,
+        queueRead: {
+          retryEnabled: false,
+          cacheEnabled: false
+        }
+      },
+      workspaceUser: adminUser,
+      dataSource: createTwentyQueueDataSource({
+        config: {
+          apiKey: 'test-key'
+        },
+        queueRead: {
+          retryEnabled: false,
+          cacheEnabled: false
+        },
+        restClient: fakeTwentyQueueRestClient({
+          failures: {
+            timelineActivities: httpError(429, 'Timeline rate limited')
+          }
+        })
+      }),
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+
+    expect(result.status).toBe('ok');
+    expect(result.isPartial).toBe(true);
+    expect(result.partialReason).toBe('twenty_non_critical_read_failed');
+    expect(result.count).toBeGreaterThan(0);
+    expect(result.warnings).toContain('Twenty full queue read skipped timelineActivities: Timeline rate limited');
+  });
+
+  it('retries transient queue read errors with bounded attempts', async () => {
+    const restClient = fakeTwentyQueueRestClient({
+      failures: {
+        people: [httpError(502, 'Temporary upstream failure')]
+      }
+    });
+    const result = await getOutboundQueueWorkflow({
+      queueSlug: 'fresh-leads',
+      query: {
+        ownerScope: 'all'
+      },
+      config: {
+        ...baseConfig,
+        queueRead: {
+          retryEnabled: true,
+          retryMaxAttempts: 2,
+          retryBaseMs: 0,
+          cacheEnabled: false
+        }
+      },
+      workspaceUser: adminUser,
+      dataSource: createTwentyQueueDataSource({
+        config: {
+          apiKey: 'test-key'
+        },
+        queueRead: {
+          retryEnabled: true,
+          retryMaxAttempts: 2,
+          retryBaseMs: 0,
+          cacheEnabled: false
+        },
+        restClient
+      }),
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+
+    expect(result.status).toBe('ok');
+    expect(restClient.calls.people).toBe(2);
+  });
+
+  it('returns stale cache when a critical read is rate-limited after a successful read', async () => {
+    clearTwentyQueueReadCache();
+    const queueRead = {
+      retryEnabled: false,
+      cacheEnabled: true,
+      cacheTtlSeconds: 90
+    };
+    const restClient = fakeTwentyQueueRestClient();
+    const dataSource = createTwentyQueueDataSource({
+      config: {
+        apiKey: 'test-key'
+      },
+      queueRead,
+      restClient
+    });
+    await getOutboundQueueWorkflow({
+      queueSlug: 'fresh-leads',
+      query: {
+        ownerScope: 'all'
+      },
+      config: {
+        ...baseConfig,
+        queueRead
+      },
+      workspaceUser: adminUser,
+      dataSource,
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+
+    restClient.failures.people = httpError(429, 'People rate limited', { retryAfter: 5 });
+
+    const stale = await getOutboundQueueWorkflow({
+      queueSlug: 'fresh-leads',
+      query: {
+        ownerScope: 'all'
+      },
+      config: {
+        ...baseConfig,
+        queueRead
+      },
+      workspaceUser: adminUser,
+      dataSource,
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+
+    expect(stale).toMatchObject({
+      status: 'stale_cache',
+      isPartial: false,
+      partialReason: 'twenty_rate_limited',
+      retryAfterSeconds: 5
+    });
+    expect(stale.count).toBeGreaterThan(0);
+    expect(stale.diagnostics.queueReadStatus.cache).toMatchObject({
+      ttlSeconds: 90
+    });
+
+    clearTwentyQueueReadCache();
+  });
+
   it('adds pipeline review reasons for review categories', async () => {
     const result = await getOutboundQueueWorkflow({
       queueSlug: 'pipeline-review',
@@ -1281,6 +1506,113 @@ function fakeQueueDataSource(overrides = {}) {
       };
     }
   };
+}
+
+function fakeTwentyQueueRestClient({ failures = {}, records = {} } = {}) {
+  const client = {
+    failures,
+    calls: {
+      people: 0,
+      tasks: 0,
+      taskTargets: 0,
+      noteTargets: 0,
+      timelineActivities: 0,
+      workspaceMembers: 0
+    },
+    async listAllRecords(objectPlural) {
+      this.calls[objectPlural] = (this.calls[objectPlural] ?? 0) + 1;
+      const failure = consumeFailure(this.failures, objectPlural);
+
+      if (failure) {
+        throw failure;
+      }
+
+      const objectRecords = records[objectPlural] ?? defaultTwentyQueueRecords(objectPlural);
+
+      return {
+        records: objectRecords,
+        warnings: [],
+        pagination: {
+          objectPlural,
+          pagesFetched: 1,
+          totalFetched: objectRecords.length,
+          totalCount: objectRecords.length,
+          hasMore: false
+        }
+      };
+    },
+    async listRecords(objectPlural) {
+      return (await this.listAllRecords(objectPlural)).records;
+    }
+  };
+
+  return client;
+}
+
+function consumeFailure(failures, objectPlural) {
+  const failure = failures[objectPlural];
+
+  if (Array.isArray(failure)) {
+    return failure.shift() ?? null;
+  }
+
+  return failure ?? null;
+}
+
+function defaultTwentyQueueRecords(objectPlural) {
+  if (objectPlural === 'people') {
+    return queuePeople();
+  }
+
+  if (objectPlural === 'tasks') {
+    return queueTasks();
+  }
+
+  if (objectPlural === 'taskTargets') {
+    return [
+      {
+        id: 'task-target-fresh',
+        taskId: 'tasks-fresh',
+        targetPersonId: 'people-fresh'
+      },
+      {
+        id: 'task-target-follow',
+        taskId: 'tasks-follow',
+        targetPersonId: 'people-follow'
+      }
+    ];
+  }
+
+  if (objectPlural === 'workspaceMembers') {
+    return [
+      {
+        id: 'workspace-member-rep',
+        userEmail: 'rep@visiblegap.com',
+        name: {
+          firstName: 'Visible Gap',
+          lastName: 'Rep'
+        }
+      },
+      {
+        id: 'workspace-member-other',
+        userEmail: 'other@visiblegap.com'
+      }
+    ];
+  }
+
+  return [];
+}
+
+function httpError(status, message, { retryAfter } = {}) {
+  const error = new Error(message);
+  error.response = {
+    status,
+    data: {
+      message
+    },
+    headers: retryAfter === undefined ? {} : { 'retry-after': String(retryAfter) }
+  };
+  return error;
 }
 
 function queuePeople() {

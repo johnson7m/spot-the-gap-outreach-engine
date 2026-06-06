@@ -15,6 +15,7 @@ export async function getOutboundQueueWorkflow({
     dataSource ??
     createTwentyQueueDataSource({
       config: config.twenty ?? config,
+      queueRead: config.queueRead ?? {},
       log
     });
   const records =
@@ -45,19 +46,94 @@ export async function getOutboundQueueWorkflow({
     recordWarnings: records.warnings ?? [],
     paginationWarnings: buildPaginationWarnings(records.pagination)
   });
+  const readStatus = normalizeQueueReadStatus(records.readStatus);
+  const readWarnings = buildQueueReadWarnings(readStatus);
+  const queueWarnings = [
+    ...warningBuckets.userWarnings,
+    ...readWarnings,
+    ...(queue.warnings ?? [])
+  ];
+
+  if (isCriticalReadDegraded(readStatus)) {
+    return {
+      queueName: queue.queueName,
+      queueSlug: queue.queueSlug,
+      items: [],
+      count: null,
+      limit: queue.limit,
+      offset: queue.offset,
+      ownerScope: queue.ownerScope,
+      assigneeScope: queue.assigneeScope,
+      dataSource: source.provider ?? 'unknown',
+      status: readStatus.status,
+      isPartial: true,
+      partialReason: readStatus.partialReason,
+      retryAfterSeconds: readStatus.retryAfterSeconds,
+      diagnostics: {
+        ...(queue.diagnostics ?? {}),
+        timelinePaginationWarning: warningBuckets.timelinePaginationWarning,
+        queueReadStatus: readStatus,
+        staleCacheGuidance: readStatus.staleCacheGuidance
+      },
+      warnings: queueWarnings
+    };
+  }
 
   return {
     ...queue,
     dataSource: source.provider ?? 'unknown',
+    status: readStatus.status,
+    isPartial: Boolean(readStatus.isPartial),
+    partialReason: readStatus.partialReason,
+    retryAfterSeconds: readStatus.retryAfterSeconds,
     diagnostics: {
       ...(queue.diagnostics ?? {}),
-      timelinePaginationWarning: warningBuckets.timelinePaginationWarning
+      timelinePaginationWarning: warningBuckets.timelinePaginationWarning,
+      queueReadStatus: readStatus,
+      staleCacheGuidance: readStatus.staleCacheGuidance
     },
-    warnings: [
-      ...warningBuckets.userWarnings,
-      ...(queue.warnings ?? [])
-    ]
+    warnings: queueWarnings
   };
+}
+
+function isCriticalReadDegraded(readStatus = {}) {
+  return Boolean(
+    readStatus.isPartial &&
+      readStatus.criticalFailures?.length > 0 &&
+      readStatus.status !== 'stale_cache'
+  );
+}
+
+function normalizeQueueReadStatus(readStatus = {}) {
+  return {
+    status: readStatus.status ?? 'ok',
+    isPartial: Boolean(readStatus.isPartial),
+    partialReason: readStatus.partialReason ?? null,
+    retryAfterSeconds: readStatus.retryAfterSeconds ?? null,
+    criticalFailures: readStatus.criticalFailures ?? [],
+    nonCriticalFailures: readStatus.nonCriticalFailures ?? [],
+    staleCacheGuidance: readStatus.staleCacheGuidance ?? null,
+    cache: readStatus.cache ?? null
+  };
+}
+
+function buildQueueReadWarnings(readStatus = {}) {
+  if (readStatus.status === 'stale_cache') {
+    return [readStatus.staleCacheGuidance].filter(Boolean);
+  }
+
+  if (readStatus.status === 'degraded_rate_limited') {
+    return [
+      readStatus.staleCacheGuidance ??
+        'Queue data is temporarily rate-limited by Twenty. Retry shortly.'
+    ];
+  }
+
+  if (readStatus.criticalFailures?.length > 0) {
+    return ['Queue data is degraded because one or more critical Twenty reads failed.'];
+  }
+
+  return [];
 }
 
 function splitQueueWarnings({ recordWarnings = [], paginationWarnings = [] } = {}) {

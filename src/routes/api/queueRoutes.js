@@ -81,6 +81,10 @@ export async function handleQueueFetch(
           ownerScope: result.ownerScope,
           assigneeScope: result.assigneeScope,
           dataSource: result.dataSource,
+          status: result.status,
+          isPartial: result.isPartial,
+          partialReason: result.partialReason,
+          retryAfterSeconds: result.retryAfterSeconds,
           diagnostics: result.diagnostics,
           warnings: result.warnings
         },

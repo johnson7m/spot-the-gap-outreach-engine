@@ -582,9 +582,22 @@ Response:
     "ownerScope": "mine",
     "assigneeScope": "mine",
     "dataSource": "twenty",
+    "status": "ok",
+    "isPartial": false,
+    "partialReason": null,
+    "retryAfterSeconds": null,
     "diagnostics": {
       "hiddenTestRecords": 0,
-      "timelinePaginationWarning": null
+      "timelinePaginationWarning": null,
+      "queueReadStatus": {
+        "status": "ok",
+        "isPartial": false,
+        "partialReason": null,
+        "retryAfterSeconds": null,
+        "criticalFailures": [],
+        "nonCriticalFailures": []
+      },
+      "staleCacheGuidance": null
     },
     "warnings": []
   },
@@ -592,6 +605,27 @@ Response:
   "errors": []
 }
 ```
+
+Queue read states:
+
+- `status="ok"`: critical Twenty reads succeeded. Non-critical failures can
+  still set `isPartial=true` with warnings.
+- `status="degraded_rate_limited"`: a critical Twenty read such as `people`,
+  `tasks`, `taskTargets`, or required `workspaceMembers` returned 429. The
+  response keeps `ok=true`, but `count=null`, `items=[]`, `isPartial=true`,
+  `partialReason="twenty_rate_limited"`, and `retryAfterSeconds` when Twenty
+  provided it. The workspace should show a temporary rate-limit state, not an
+  empty queue.
+- `status="stale_cache"`: a critical read was rate-limited, but the engine
+  returned the last successful queue snapshot from the short-lived cache.
+  `diagnostics.queueReadStatus.cache` includes `cachedAt`, `ageSeconds`, and
+  `ttlSeconds`.
+
+Critical queue reads are `people`, `tasks`, and `taskTargets`.
+`workspaceMembers` is also critical when `ownerScope=mine` or
+`assigneeScope=mine` is needed to enforce rep ownership. `noteTargets` and
+`timelineActivities` are non-critical; their failures should be shown as
+warnings/diagnostics without implying the queue is empty.
 
 Fresh Leads criteria:
 
