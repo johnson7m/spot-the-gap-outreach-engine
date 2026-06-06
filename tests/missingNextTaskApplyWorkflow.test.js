@@ -105,6 +105,27 @@ describe('missing next-task apply workflow', () => {
     expect(payload.bodyV2.markdown).toContain('Manual action required. Do not automate LinkedIn requests or messages.');
   });
 
+  it('adjusts past recommended due dates again when building apply operations', () => {
+    const operation = buildMissingNextTaskOperation({
+      record: safePlanRecord('person-safe-past-due', {
+        nextOutboundTouchDate: '2026-06-05',
+        recommendedDueDate: '2026-06-05'
+      }),
+      now: new Date('2026-06-06T15:00:00.000Z')
+    });
+
+    expect(operation).toMatchObject({
+      recommendedDueDate: '2026-06-08',
+      originalRecommendedDueDate: '2026-06-05',
+      dueDateAdjusted: true,
+      dueDateAdjustmentReason: 'past_due_date:2026-06-05<2026-06-06'
+    });
+    expect(operation.taskPayload).toMatchObject({
+      dueAt: '2026-06-08'
+    });
+    expect(operation.taskPayload.bodyV2.markdown).toContain('Due date adjusted: true');
+  });
+
   it('avoids duplicate open Tasks for the Person during live apply', async () => {
     const restClient = fakeTaskClient({
       tasks: [

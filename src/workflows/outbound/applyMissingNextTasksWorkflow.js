@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { createTwentyRestClient } from '../../integrations/twenty/restClient.js';
 import { buildNextTaskDedupeKey } from '../../integrations/twenty/taskCompletionPayloadBuilders.js';
 import { createOperationalStore } from '../../persistence/operationalStore.js';
+import { resolveSafeMissingNextTaskDueDate } from '../../utils/projectDate.js';
 
 const REPEATED_FAILURE_LIMIT = 2;
 const OPEN_TASK_STATUSES = new Set(['TODO', 'OPEN', 'IN_PROGRESS', 'NOT_STARTED']);
@@ -42,6 +43,7 @@ export async function applyMissingNextTaskPlan({
     buildMissingNextTaskOperation({
       record,
       linkCompany: normalizedOptions.linkCompany,
+      allowPastDue: normalizedOptions.allowPastDue,
       now
     })
   );
@@ -258,6 +260,7 @@ export function normalizeMissingNextTaskApplyOptions(options = {}) {
     includeTestRecords: toBoolean(options.includeTestRecords),
     force: toBoolean(options.force),
     linkCompany: toBoolean(options.linkCompany),
+    allowPastDue: toBoolean(options.allowPastDue),
     batchSize: normalizePositiveInt(rawBatchSize, 5),
     batchSizeProvided,
     offset: normalizeNonNegativeInt(options.offset, 0)
@@ -306,39 +309,63 @@ export function isEligibleMissingNextTaskRecord(record = {}, options = {}) {
   return true;
 }
 
-export function buildMissingNextTaskOperation({ record, linkCompany = false, now = new Date() }) {
+export function buildMissingNextTaskOperation({
+  record,
+  linkCompany = false,
+  allowPastDue = false,
+  now = new Date()
+}) {
+  const dueDate = resolveSafeMissingNextTaskDueDate({
+    recommendedDueDate: record.recommendedDueDate,
+    allowPastDue,
+    now
+  });
+  const adjustedRecord = {
+    ...record,
+    originalRecommendedDueDate:
+      record.originalRecommendedDueDate ?? dueDate.originalRecommendedDueDate ?? record.recommendedDueDate ?? null,
+    recommendedDueDate: dueDate.recommendedDueDate,
+    dueDateAdjusted: Boolean(record.dueDateAdjusted || dueDate.dueDateAdjusted),
+    dueDateAdjustmentReason:
+      dueDate.dueDateAdjustmentReason ?? record.dueDateAdjustmentReason ?? null
+  };
   const dedupeKey = buildNextTaskDedupeKey({
-    personId: record.personId,
-    cadenceName: record.cadenceName,
-    nextCadenceStage: record.cadenceStage,
-    taskType: record.recommendedTaskType
+    personId: adjustedRecord.personId,
+    cadenceName: adjustedRecord.cadenceName,
+    nextCadenceStage: adjustedRecord.cadenceStage,
+    taskType: adjustedRecord.recommendedTaskType
   });
   const taskPayload = buildMissingNextTaskPayload({
-    record,
+    record: adjustedRecord,
     dedupeKey,
     now
   });
-  const correlationId = `missing-next-task:${record.personId}:${randomUUID()}`;
-  const skippedReason = getOperationSkippedReason({ record, taskPayload });
-  const companyId = firstString(record.targetCompanyId, record.companyId, record.company?.id);
+  const correlationId = `missing-next-task:${adjustedRecord.personId}:${randomUUID()}`;
+  const skippedReason = getOperationSkippedReason({ record: adjustedRecord, taskPayload });
+  const companyId = firstString(adjustedRecord.targetCompanyId, adjustedRecord.companyId, adjustedRecord.company?.id);
 
   return {
-    personId: record.personId ?? null,
-    personName: record.personName ?? null,
-    owner: record.owner ?? null,
-    cadenceName: record.cadenceName ?? null,
-    cadenceStage: record.cadenceStage ?? null,
-    latestTouchChannel: record.latestTouchChannel ?? null,
-    latestTouchStatus: record.latestTouchStatus ?? null,
-    recommendedTaskTitle: record.recommendedTaskTitle ?? null,
-    recommendedDueDate: record.recommendedDueDate ?? null,
-    recommendedTaskType: record.recommendedTaskType ?? null,
-    confidence: record.confidence ?? null,
-    safeToCreate: Boolean(record.safeToCreate),
-    isTestRecord: Boolean(record.isTestRecord),
-    testRecordReasons: record.testRecordReasons ?? [],
-    warnings: record.warnings ?? [],
-    evidence: record.evidence ?? [],
+    personId: adjustedRecord.personId ?? null,
+    personName: adjustedRecord.personName ?? null,
+    owner: adjustedRecord.owner ?? null,
+    cadenceName: adjustedRecord.cadenceName ?? null,
+    cadenceStage: adjustedRecord.cadenceStage ?? null,
+    latestTouchChannel: adjustedRecord.latestTouchChannel ?? null,
+    latestTouchStatus: adjustedRecord.latestTouchStatus ?? null,
+    nextOutboundTouchDate: adjustedRecord.nextOutboundTouchDate ?? null,
+    originalNextOutboundTouchDate: adjustedRecord.originalNextOutboundTouchDate ?? null,
+    recommendedTaskTitle: adjustedRecord.recommendedTaskTitle ?? null,
+    recommendedDueDate: adjustedRecord.recommendedDueDate ?? null,
+    originalRecommendedDueDate: adjustedRecord.originalRecommendedDueDate ?? null,
+    dueDateAdjusted: Boolean(adjustedRecord.dueDateAdjusted),
+    dueDateAdjustmentReason: adjustedRecord.dueDateAdjustmentReason ?? null,
+    recommendedTaskType: adjustedRecord.recommendedTaskType ?? null,
+    confidence: adjustedRecord.confidence ?? null,
+    safeToCreate: Boolean(adjustedRecord.safeToCreate),
+    isTestRecord: Boolean(adjustedRecord.isTestRecord),
+    testRecordReasons: adjustedRecord.testRecordReasons ?? [],
+    warnings: adjustedRecord.warnings ?? [],
+    evidence: adjustedRecord.evidence ?? [],
     companyId: companyId || null,
     companyTargetEnabled: Boolean(linkCompany && companyId),
     dedupeKey,
@@ -580,6 +607,10 @@ function buildMissingNextTaskOutboundEventEntry({ operation, status, now }) {
       recommendedTaskType: operation.recommendedTaskType,
       recommendedTaskTitle: operation.recommendedTaskTitle,
       recommendedDueDate: operation.recommendedDueDate,
+      originalRecommendedDueDate: operation.originalRecommendedDueDate,
+      originalNextOutboundTouchDate: operation.originalNextOutboundTouchDate,
+      dueDateAdjusted: operation.dueDateAdjusted,
+      dueDateAdjustmentReason: operation.dueDateAdjustmentReason,
       dedupeKey: operation.dedupeKey,
       owner: operation.owner,
       taskPayload: operation.taskPayload
@@ -637,6 +668,11 @@ function buildMissingNextTaskMarkdown({ record = {}, dedupeKey, now = new Date()
     `Cadence: ${record.cadenceName}`,
     `Cadence stage: ${record.cadenceStage}`,
     `Task type: ${record.recommendedTaskType}`,
+    `Original next outbound touch date: ${record.originalNextOutboundTouchDate ?? 'Not provided'}`,
+    `Original recommended due date: ${record.originalRecommendedDueDate ?? 'Not provided'}`,
+    `Recommended due date: ${record.recommendedDueDate ?? 'Not provided'}`,
+    `Due date adjusted: ${record.dueDateAdjusted ? 'true' : 'false'}`,
+    `Due date adjustment reason: ${record.dueDateAdjustmentReason ?? 'none'}`,
     `Latest touch channel: ${record.latestTouchChannel ?? 'Not provided'}`,
     `Latest touch status: ${record.latestTouchStatus ?? 'Not provided'}`,
     '',
@@ -663,6 +699,7 @@ function buildGuardState(options) {
     includeTestRecords: options.includeTestRecords,
     force: options.force,
     linkCompany: options.linkCompany,
+    allowPastDue: options.allowPastDue,
     batchSize: options.batchSize,
     batchSizeProvided: options.batchSizeProvided,
     offset: options.offset

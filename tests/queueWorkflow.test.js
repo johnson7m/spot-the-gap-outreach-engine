@@ -138,6 +138,100 @@ describe('outbound queue workflow', () => {
     );
   });
 
+  it('keeps newly generated initial tasks with old Person next-touch dates in Fresh Leads', async () => {
+    const people = [
+      queueLead('people-generated-initial', {
+        cadenceName: 'RELATIONSHIP_BUILDING_V1',
+        cadenceStage: 'NOT_STARTED',
+        latestTouchStatus: 'DRAFTED',
+        nextOutboundTouchDate: '2026-06-05'
+      })
+    ];
+    const tasks = [
+      queueTask('tasks-generated-initial', {
+        personId: 'people-generated-initial',
+        title: 'Send relationship-oriented connection request',
+        dueAt: '2026-06-08',
+        bodyV2: {
+          markdown: [
+            'Source: Missing next-task planner',
+            'Person ID: people-generated-initial',
+            'Cadence: RELATIONSHIP_BUILDING_V1',
+            'Cadence stage: NOT_STARTED',
+            'Task type: connection_request',
+            'Due date adjusted: true'
+          ].join('\n')
+        }
+      })
+    ];
+    const fresh = await getOutboundQueueWorkflow({
+      queueSlug: 'fresh-leads',
+      query: {
+        ownerScope: 'all'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({ people, tasks }),
+      now: new Date('2026-06-06T15:00:00.000Z')
+    });
+    const stale = await getOutboundQueueWorkflow({
+      queueSlug: 'stale-recovery',
+      query: {
+        ownerScope: 'all'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({ people, tasks }),
+      now: new Date('2026-06-06T15:00:00.000Z')
+    });
+
+    expect(fresh.items.map((item) => item.personId)).toEqual(['people-generated-initial']);
+    expect(fresh.items[0]).toMatchObject({
+      taskId: 'tasks-generated-initial',
+      queueClassification: 'fresh_initial_task'
+    });
+    expect(stale.items.map((item) => item.personId)).not.toContain('people-generated-initial');
+  });
+
+  it('still routes genuinely stale post-initial records to Stale Recovery', async () => {
+    const people = [
+      queueLead('people-post-initial-stale', {
+        cadenceStage: 'INTRO_MESSAGE',
+        latestTouchStatus: 'NO_RESPONSE',
+        nextOutboundTouchDate: '2026-06-01'
+      })
+    ];
+    const tasks = [
+      queueTask('tasks-post-initial-stale', {
+        personId: 'people-post-initial-stale',
+        title: 'Send contextual introduction',
+        bodyV2: {
+          markdown: [
+            'Person ID: people-post-initial-stale',
+            'Cadence: RELATIONSHIP_BUILDING_V1',
+            'Next cadence stage: INTRO_MESSAGE',
+            'Latest touch status: NO_RESPONSE'
+          ].join('\n')
+        }
+      })
+    ];
+    const result = await getOutboundQueueWorkflow({
+      queueSlug: 'stale-recovery',
+      query: {
+        ownerScope: 'all'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({ people, tasks }),
+      now: new Date('2026-06-06T15:00:00.000Z')
+    });
+
+    expect(result.items.map((item) => item.personId)).toEqual(['people-post-initial-stale']);
+    expect(result.items[0].queueClassificationReasons).toEqual(
+      expect.arrayContaining(['next_touch_overdue', 'latest_touch_no_response'])
+    );
+  });
+
   it('identifies warm assessment leads from protected assessment fields', async () => {
     const result = await getOutboundQueueWorkflow({
       queueSlug: 'warm-assessments',
@@ -218,6 +312,324 @@ describe('outbound queue workflow', () => {
       'No open task exists yet; create the first cadence task.'
     );
     expect(freshLead.suggestedResolutionActions).toEqual(['create_next_task']);
+  });
+
+  it('keeps NOT_STARTED relationship connection requests in Fresh Leads only', async () => {
+    const people = [
+      queueLead('people-initial-relationship', {
+        cadenceName: 'RELATIONSHIP_BUILDING_V1',
+        cadenceStage: 'NOT_STARTED',
+        latestTouchStatus: 'DRAFTED'
+      })
+    ];
+    const tasks = [
+      queueTask('tasks-initial-relationship', {
+        personId: 'people-initial-relationship',
+        title: 'Send relationship-oriented connection request',
+        bodyV2: {
+          markdown: [
+            'Person ID: people-initial-relationship',
+            'Cadence: RELATIONSHIP_BUILDING_V1',
+            'Cadence stage: NOT_STARTED',
+            'Task type: connection_request'
+          ].join('\n')
+        }
+      })
+    ];
+    const fresh = await getOutboundQueueWorkflow({
+      queueSlug: 'fresh-leads',
+      query: {
+        ownerScope: 'all'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({ people, tasks }),
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+    const followUps = await getOutboundQueueWorkflow({
+      queueSlug: 'follow-ups',
+      query: {
+        ownerScope: 'all',
+        dueBefore: '2026-06-04'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({ people, tasks }),
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+
+    expect(fresh.items.map((item) => item.personId)).toEqual(['people-initial-relationship']);
+    expect(fresh.items[0]).toMatchObject({
+      taskId: 'tasks-initial-relationship',
+      queueClassification: 'fresh_initial_task',
+      queueClassificationReasons: expect.arrayContaining([
+        'fresh_initial_task',
+        'cadence_not_started',
+        'initial_outreach_task_open'
+      ])
+    });
+    expect(followUps.items).toHaveLength(0);
+  });
+
+  it('keeps NOT_STARTED assessment connection requests in Fresh Leads only', async () => {
+    const people = [
+      queueLead('people-initial-assessment', {
+        cadenceName: 'ASSESSMENT_CAMPAIGN_V1',
+        cadenceStage: 'NOT_STARTED',
+        latestTouchStatus: 'DRAFTED',
+        outboundPipelineType: 'ASSESSMENT_CAMPAIGN'
+      })
+    ];
+    const tasks = [
+      queueTask('tasks-initial-assessment', {
+        personId: 'people-initial-assessment',
+        title: 'Send assessment-oriented connection request',
+        bodyV2: {
+          markdown: [
+            'Person ID: people-initial-assessment',
+            'Cadence: ASSESSMENT_CAMPAIGN_V1',
+            'Cadence stage: NOT_STARTED',
+            'Task type: connection_request'
+          ].join('\n')
+        }
+      })
+    ];
+    const fresh = await getOutboundQueueWorkflow({
+      queueSlug: 'fresh-leads',
+      query: {
+        ownerScope: 'all'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({ people, tasks }),
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+    const followUps = await getOutboundQueueWorkflow({
+      queueSlug: 'follow-ups',
+      query: {
+        ownerScope: 'all',
+        dueBefore: '2026-06-04'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({ people, tasks }),
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+
+    expect(fresh.items.map((item) => item.personId)).toEqual(['people-initial-assessment']);
+    expect(followUps.items).toHaveLength(0);
+  });
+
+  it('puts INTRO_MESSAGE open tasks in Follow-Ups', async () => {
+    const people = [
+      queueLead('people-intro', {
+        cadenceStage: 'INTRO_MESSAGE',
+        latestTouchStatus: 'SENT'
+      })
+    ];
+    const tasks = [
+      queueTask('tasks-intro', {
+        personId: 'people-intro',
+        title: 'Send contextual introduction',
+        bodyV2: {
+          markdown: [
+            'Person ID: people-intro',
+            'Cadence: RELATIONSHIP_BUILDING_V1',
+            'Next cadence stage: INTRO_MESSAGE',
+            'Latest touch status: SENT'
+          ].join('\n')
+        }
+      })
+    ];
+    const result = await getOutboundQueueWorkflow({
+      queueSlug: 'follow-ups',
+      query: {
+        ownerScope: 'all',
+        dueBefore: '2026-06-04'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({ people, tasks }),
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+
+    expect(result.items.map((item) => item.personId)).toEqual(['people-intro']);
+    expect(result.items[0]).toMatchObject({
+      queueClassification: 'follow_up_post_initial_touch',
+      queueClassificationReasons: expect.arrayContaining(['post_initial_cadence_stage'])
+    });
+  });
+
+  it('puts ASSESSMENT_POSITIONING open tasks in Follow-Ups', async () => {
+    const people = [
+      queueLead('people-assessment-positioning', {
+        outboundPipelineType: 'ASSESSMENT_CAMPAIGN',
+        cadenceName: 'ASSESSMENT_CAMPAIGN_V1',
+        cadenceStage: 'ASSESSMENT_POSITIONING',
+        latestTouchStatus: 'SENT'
+      })
+    ];
+    const tasks = [
+      queueTask('tasks-assessment-positioning', {
+        personId: 'people-assessment-positioning',
+        title: 'Send assessment positioning message',
+        bodyV2: {
+          markdown: [
+            'Person ID: people-assessment-positioning',
+            'Cadence: ASSESSMENT_CAMPAIGN_V1',
+            'Next cadence stage: ASSESSMENT_POSITIONING',
+            'Latest touch status: SENT'
+          ].join('\n')
+        }
+      })
+    ];
+    const result = await getOutboundQueueWorkflow({
+      queueSlug: 'follow-ups',
+      query: {
+        ownerScope: 'all',
+        dueBefore: '2026-06-04'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({ people, tasks }),
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+
+    expect(result.items.map((item) => item.personId)).toEqual(['people-assessment-positioning']);
+    expect(result.items[0].queueClassification).toBe('follow_up_post_initial_touch');
+  });
+
+  it('keeps legacy LI Day 2 tasks in Follow-Ups when history indicates outreach started', async () => {
+    const people = [
+      queueLead('people-legacy-day-2', {
+        cadenceStage: 'NOT_STARTED',
+        latestTouchStatus: 'DRAFTED'
+      })
+    ];
+    const tasks = [
+      queueTask('tasks-legacy-day-2', {
+        personId: 'people-legacy-day-2',
+        title: 'LI - Day 2',
+        bodyV2: {
+          markdown: [
+            'Person ID: people-legacy-day-2',
+            'Cadence: RELATIONSHIP_BUILDING_V1',
+            'Cadence stage: NOT_STARTED'
+          ].join('\n')
+        }
+      })
+    ];
+    const result = await getOutboundQueueWorkflow({
+      queueSlug: 'follow-ups',
+      query: {
+        ownerScope: 'all',
+        dueBefore: '2026-06-04'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({ people, tasks }),
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+
+    expect(result.items.map((item) => item.personId)).toEqual(['people-legacy-day-2']);
+    expect(result.items[0]).toMatchObject({
+      queueClassification: 'follow_up_legacy_task_history',
+      queueClassificationReasons: ['follow_up_legacy_task_history']
+    });
+  });
+
+  it('does not put the same initial person/task pair in Fresh and Follow-Up by default', async () => {
+    const people = [
+      queueLead('people-no-duplicate', {
+        cadenceStage: 'NOT_STARTED',
+        latestTouchStatus: 'DRAFTED'
+      })
+    ];
+    const tasks = [
+      queueTask('tasks-no-duplicate', {
+        personId: 'people-no-duplicate',
+        title: 'Send relationship-oriented connection request',
+        bodyV2: {
+          markdown: [
+            'Person ID: people-no-duplicate',
+            'Cadence: RELATIONSHIP_BUILDING_V1',
+            'Cadence stage: NOT_STARTED',
+            'Task type: connection_request'
+          ].join('\n')
+        }
+      })
+    ];
+    const fresh = await getOutboundQueueWorkflow({
+      queueSlug: 'fresh-leads',
+      query: {
+        ownerScope: 'all'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({ people, tasks }),
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+    const followUps = await getOutboundQueueWorkflow({
+      queueSlug: 'follow-ups',
+      query: {
+        ownerScope: 'all',
+        dueBefore: '2026-06-04'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({ people, tasks }),
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+
+    expect(fresh.items.map((item) => `${item.personId}:${item.taskId}`)).toEqual([
+      'people-no-duplicate:tasks-no-duplicate'
+    ]);
+    expect(followUps.items.map((item) => `${item.personId}:${item.taskId}`)).toEqual([]);
+  });
+
+  it('can include classification diagnostics for matched and excluded queues', async () => {
+    const people = [
+      queueLead('people-diagnostics', {
+        cadenceStage: 'NOT_STARTED',
+        latestTouchStatus: 'DRAFTED'
+      })
+    ];
+    const tasks = [
+      queueTask('tasks-diagnostics', {
+        personId: 'people-diagnostics',
+        title: 'Send relationship-oriented connection request',
+        bodyV2: {
+          markdown: [
+            'Person ID: people-diagnostics',
+            'Cadence: RELATIONSHIP_BUILDING_V1',
+            'Cadence stage: NOT_STARTED',
+            'Task type: connection_request'
+          ].join('\n')
+        }
+      })
+    ];
+    const result = await getOutboundQueueWorkflow({
+      queueSlug: 'fresh-leads',
+      query: {
+        ownerScope: 'all',
+        includeDiagnostics: 'true'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({ people, tasks }),
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+
+    expect(result.items[0].classificationDiagnostics).toMatchObject({
+      matchedQueues: ['fresh-leads'],
+      finalQueue: 'fresh-leads',
+      excludedQueues: [
+        expect.objectContaining({
+          queueSlug: 'follow-ups',
+          classificationReasons: ['excluded_initial_outreach_fresh_lead']
+        })
+      ]
+    });
   });
 
   it('hides obvious test records by default and includes them only when requested', async () => {
@@ -660,6 +1072,55 @@ describe('missing next-task planner', () => {
     });
   });
 
+  it('adjusts past recommended due dates and preserves the original outbound date', () => {
+    const result = buildMissingNextTaskPlans(
+      {
+        people: [
+          missingTaskPerson('people-past-due', {
+            nextOutboundTouchDate: '2026-06-05'
+          })
+        ],
+        tasks: [],
+        taskTargets: []
+      },
+      {
+        now: new Date('2026-06-06T15:00:00.000Z')
+      }
+    );
+
+    expect(result.records).toHaveLength(1);
+    expect(result.records[0]).toMatchObject({
+      originalNextOutboundTouchDate: '2026-06-05',
+      originalRecommendedDueDate: '2026-06-05',
+      recommendedDueDate: '2026-06-08',
+      dueDateAdjusted: true,
+      dueDateAdjustmentReason: 'past_due_date:2026-06-05<2026-06-06'
+    });
+  });
+
+  it('adjusts same-day due dates after the project business cutoff', () => {
+    const result = buildMissingNextTaskPlans(
+      {
+        people: [
+          missingTaskPerson('people-same-day-after-cutoff', {
+            nextOutboundTouchDate: '2026-06-05'
+          })
+        ],
+        tasks: [],
+        taskTargets: []
+      },
+      {
+        now: new Date('2026-06-06T01:30:00.000Z')
+      }
+    );
+
+    expect(result.records[0]).toMatchObject({
+      recommendedDueDate: '2026-06-08',
+      dueDateAdjusted: true,
+      dueDateAdjustmentReason: 'same_day_after_business_cutoff:2026-06-05'
+    });
+  });
+
   it('excludes terminal, paused, completed, and active-client People', () => {
     const result = buildMissingNextTaskPlans({
       people: [
@@ -1005,6 +1466,51 @@ function unassignedTask(id, overrides = {}) {
     dueAt: '2026-06-04',
     bodyV2: {
       markdown: 'No Person ID marker or unique lead name.'
+    },
+    ...overrides
+  };
+}
+
+function queueLead(id, overrides = {}) {
+  return {
+    id,
+    name: {
+      firstName: 'Alex',
+      lastName: id.replace(/^people-/, '').replace(/-/g, ' ')
+    },
+    jobTitle: 'Operations Leader',
+    company: {
+      name: 'Northstar Operations Co'
+    },
+    emails: {
+      primaryEmail: `${id.replace(/[^a-z0-9]/gi, '.')}@northstarops.com`
+    },
+    linkedinLink: {
+      primaryLinkUrl: `https://www.linkedin.com/in/${id}`
+    },
+    outboundPipelineType: 'RELATIONSHIP_BUILDING',
+    cadenceName: 'RELATIONSHIP_BUILDING_V1',
+    cadenceStage: 'NOT_STARTED',
+    latestTouchStatus: 'DRAFTED',
+    latestTouchChannel: 'LINKEDIN',
+    leadHealthScore: 60,
+    icpFitScore: 70,
+    owner: {
+      userEmail: 'rep@visiblegap.com',
+      name: 'Visible Gap Rep'
+    },
+    ...overrides
+  };
+}
+
+function queueTask(id, overrides = {}) {
+  return {
+    id,
+    title: 'Send relationship-oriented connection request',
+    status: 'TODO',
+    dueAt: '2026-06-04',
+    assignee: {
+      userEmail: 'rep@visiblegap.com'
     },
     ...overrides
   };

@@ -4,6 +4,12 @@ import {
   normalizeOwner,
   resolveTaskPersonLink
 } from '../../services/queueService.js';
+import {
+  addDaysToDateOnly,
+  normalizeDateOnly,
+  resolveSafeMissingNextTaskDueDate,
+  toProjectDateOnly
+} from '../../utils/projectDate.js';
 import { detectTestRecord } from '../../utils/testRecordDetection.js';
 
 const OPEN_TASK_STATUSES = new Set(['TODO', 'OPEN', 'IN_PROGRESS', 'NOT_STARTED']);
@@ -153,7 +159,14 @@ export function buildMissingNextTaskPlanRecord({ person, openTasks = [], now = n
     `latestTouchStatus=${person.latestTouchStatus}`,
     'No open task resolved through taskTargets or Person markers.'
   ];
-  const recommendedDueDate = person.nextOutboundTouchDate || addDaysDateOnly(now, taskRuleForStage.dueInDays);
+  const originalNextOutboundTouchDate = person.nextOutboundTouchDate ?? null;
+  const rawRecommendedDueDate =
+    originalNextOutboundTouchDate ||
+    addDaysToDateOnly(toProjectDateOnly(now), taskRuleForStage.dueInDays);
+  const dueDate = resolveSafeMissingNextTaskDueDate({
+    recommendedDueDate: rawRecommendedDueDate,
+    now
+  });
 
   if (!person.owner?.email && !person.owner?.id) {
     warnings.push('Owner could not be resolved; task assignment may need manual review.');
@@ -163,8 +176,8 @@ export function buildMissingNextTaskPlanRecord({ person, openTasks = [], now = n
     warnings.push('Record appears to be test/synthetic; do not create live tasks unless explicitly approved.');
   }
 
-  if (isPastDate(recommendedDueDate, now)) {
-    warnings.push(`Recommended due date ${recommendedDueDate} is in the past.`);
+  if (dueDate.dueDateAdjusted) {
+    evidence.push(`recommendedDueDate adjusted from ${rawRecommendedDueDate ?? 'missing'} to ${dueDate.recommendedDueDate}`);
   }
 
   const safeToCreate = Boolean(taskRuleForStage && !person.isTestRecord && (person.owner?.email || person.owner?.id));
@@ -179,8 +192,12 @@ export function buildMissingNextTaskPlanRecord({ person, openTasks = [], now = n
     latestTouchChannel: person.latestTouchChannel,
     latestTouchStatus: person.latestTouchStatus,
     nextOutboundTouchDate: person.nextOutboundTouchDate,
+    originalNextOutboundTouchDate,
     recommendedTaskTitle: taskRuleForStage.title,
-    recommendedDueDate,
+    recommendedDueDate: dueDate.recommendedDueDate,
+    originalRecommendedDueDate: dueDate.originalRecommendedDueDate,
+    dueDateAdjusted: dueDate.dueDateAdjusted,
+    dueDateAdjustmentReason: dueDate.dueDateAdjustmentReason,
     recommendedTaskType: taskRuleForStage.taskType,
     confidence: safeToCreate ? 'high' : 'medium',
     evidence,
@@ -256,6 +273,11 @@ function summarizeMissingNextTaskPlans(planResult = {}) {
     requiresReview: records.filter((record) => !record.safeToCreate).length,
     hiddenTestRecords: planResult.hiddenTestRecords ?? 0,
     includedTestRecords: records.filter((record) => record.isTestRecord).length,
+    dueDatesAdjusted: records.filter((record) => record.dueDateAdjusted).length,
+    byDueDateAdjustmentReason: countBy(
+      records.filter((record) => record.dueDateAdjusted),
+      (record) => record.dueDateAdjustmentReason
+    ),
     byCadenceName: countBy(records, (record) => record.cadenceName),
     byCadenceStage: countBy(records, (record) => record.cadenceStage),
     byConfidence: countBy(records, (record) => record.confidence)
@@ -341,26 +363,7 @@ function normalizeSelect(value) {
 }
 
 function normalizeDateString(value) {
-  if (!value) {
-    return null;
-  }
-
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date.toISOString().slice(0, 10);
-}
-
-function addDaysDateOnly(value, days) {
-  const date = new Date(value);
-  date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString().slice(0, 10);
-}
-
-function isPastDate(dateString, now) {
-  if (!dateString) {
-    return false;
-  }
-
-  return dateString < new Date(now).toISOString().slice(0, 10);
+  return normalizeDateOnly(value);
 }
 
 function stringify(value) {

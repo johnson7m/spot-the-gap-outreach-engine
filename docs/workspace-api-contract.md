@@ -511,6 +511,8 @@ Supported query params:
 - `includeUnassigned`: default `false`; applies to Follow-Ups.
 - `includeTestRecords`: default `false`; shows test/synthetic People for
   diagnostics.
+- `includeDiagnostics`: default `false`; adds queue classification diagnostics
+  to each item.
 - `status`: optional Task status filter for `unassigned-tasks`.
 
 Response:
@@ -559,6 +561,8 @@ Response:
           "source": "task_assignee_workspace_member"
         },
         "source": "twenty:person",
+        "queueClassification": "fresh_initial_task",
+        "queueClassificationReasons": ["fresh_initial_task", "initial_outreach_task_open"],
         "isTestRecord": false,
         "testRecordReasons": [],
         "reviewReasons": [],
@@ -594,10 +598,11 @@ Fresh Leads criteria:
 - Person `outboundPipelineType` is present.
 - Person `cadenceStage` is `CONNECTION_REQUEST` or `NOT_STARTED`.
 - Person `latestTouchStatus` is `DRAFTED`.
-- Open task is included when a matching task can be found.
+- Initial connection/request Task is included when a matching task can be found.
 - If no open task exists, the Person remains visible with
   `suggestedResolutionActions=["create_next_task"]` and the item warning
   `No open task exists yet; create the first cadence task.`
+- `queueClassification=fresh_initial_task`.
 
 Follow-Ups criteria:
 
@@ -605,11 +610,21 @@ Follow-Ups criteria:
 - Task due date is today or overdue according to `dueBefore`.
 - Person cadence is not terminal.
 - Person or parsed task body includes cadence context.
+- Post-initial cadence stages include `INTRO_MESSAGE`, `VALUE_TOUCH`,
+  `ASSESSMENT_POSITIONING`, `ASSESSMENT_SENT`, `ASSESSMENT_CHECK_IN`,
+  `STRATEGIC_CHECK_IN`, and `DISCOVERY_ASK`.
+- Legacy task titles such as `LI - Day 2`, `LI - f/u accepted connect`, and
+  `LI - final touch` can be included when task history indicates outreach has
+  already started.
+- `NOT_STARTED` initial connection/request Tasks are excluded from Follow-Ups
+  by default and stay in Fresh Leads.
 - Tasks with no reliable Person are excluded by default.
 - The response includes a warning/count such as
   `22 unassigned tasks hidden. Review Unassigned Tasks queue.`
 - `includeUnassigned=true` can include unresolved Tasks for diagnostics, but the
   workspace should keep them out of the normal Follow-Up tab by default.
+- Follow-Up classifications are `follow_up_post_initial_touch` and
+  `follow_up_legacy_task_history`.
 
 Unassigned Tasks criteria:
 
@@ -660,6 +675,10 @@ Stale Recovery criteria:
 - Person `staleRisk=STALE` or `HIGH`, or
 - `nextOutboundTouchDate` is older than the current day, or
 - `latestTouchStatus=NO_RESPONSE` with an active cadence stage.
+- Open generated first-touch Tasks from the missing next-task planner remain in
+  Fresh Leads when cadence is `NOT_STARTED` or `CONNECTION_REQUEST`; an old
+  inherited Person `nextOutboundTouchDate` alone should not route those items to
+  Stale Recovery.
 
 Pipeline Review criteria:
 
@@ -697,18 +716,42 @@ Diagnostics:
   `data.diagnostics.timelinePaginationWarning` instead of normal top-level
   queue warnings unless timeline data becomes required for an item-specific
   resolution.
+- `includeDiagnostics=true` adds `classificationDiagnostics` with
+  `matchedQueues`, `finalQueue`, `excludedQueues`, and
+  `classificationReasons`.
+
+Classification precedence:
+
+1. Stale Recovery
+2. Warm Assessment
+3. Follow-Up
+4. Fresh Lead
+5. Pipeline Review
+
+Script diagnostics:
+
+```bash
+npm run queues:diagnose-classification
+PERSON_ID=<twenty-person-id> npm run queues:diagnose-classification
+TASK_ID=<twenty-task-id> npm run queues:diagnose-classification
+```
 
 Missing next-task operations:
 
 - `npm run queues:plan-missing-next-tasks` creates a local dry-run plan for
   People with active non-terminal cadence state and no open Task.
+- The plan includes `originalNextOutboundTouchDate`,
+  `originalRecommendedDueDate`, `dueDateAdjusted`, and
+  `dueDateAdjustmentReason`; missing, past, or same-day after-cutoff first-touch
+  due dates are refreshed to the current or next business day.
 - `npm run queues:apply-missing-next-tasks` reads that local plan and remains
   dry-run unless `MISSING_NEXT_TASK_APPLY_ENABLED=true`, `LIVE_TEST=true`, and
   `MISSING_NEXT_TASK_BATCH_SIZE=<n>` are set.
 - The apply path is script-only for now; no workspace endpoint exists yet.
 - Live apply creates a Twenty Task, links it to the Person through
   `taskTargets`, verifies the link, and records CRM audit plus outbound event
-  rows.
+  rows. It re-checks due dates at apply time and refuses past-due generated
+  Tasks unless `MISSING_NEXT_TASK_ALLOW_PAST_DUE=true`.
 
 ## POST /api/tasks/:id/complete
 

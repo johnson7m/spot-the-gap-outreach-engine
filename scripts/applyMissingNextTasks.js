@@ -22,7 +22,8 @@ async function main() {
       includeReview: process.env.MISSING_NEXT_TASK_INCLUDE_REVIEW,
       includeTestRecords: process.env.MISSING_NEXT_TASK_INCLUDE_TEST_RECORDS,
       force: process.env.MISSING_NEXT_TASK_FORCE,
-      linkCompany: process.env.MISSING_NEXT_TASK_LINK_COMPANY
+      linkCompany: process.env.MISSING_NEXT_TASK_LINK_COMPANY,
+      allowPastDue: process.env.MISSING_NEXT_TASK_ALLOW_PAST_DUE
     }
   });
   const output = {
@@ -39,6 +40,10 @@ async function main() {
       cadenceStage: operation.cadenceStage,
       recommendedTaskTitle: operation.recommendedTaskTitle,
       recommendedDueDate: operation.recommendedDueDate,
+      originalRecommendedDueDate: operation.originalRecommendedDueDate,
+      originalNextOutboundTouchDate: operation.originalNextOutboundTouchDate,
+      dueDateAdjusted: operation.dueDateAdjusted,
+      dueDateAdjustmentReason: operation.dueDateAdjustmentReason,
       recommendedTaskType: operation.recommendedTaskType,
       status: operation.status,
       skippedReason: operation.skippedReason,

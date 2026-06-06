@@ -1,96 +1,103 @@
 # Missing Next-Task Dry-Run Summary
 
-Generated at: 2026-06-05T23:17:03.741Z
+Generated at: 2026-06-06T01:42:11.997Z
 
 ## Status
 
 - Mode: dry_run
 - Dry run: yes
 - Include test records: no
-- Missing next-task candidates: 277
-- Safe task creation candidates: 259
+- Missing next-task candidates: 239
+- Safe task creation candidates: 221
 - Requires review: 18
 - Test records hidden: 10
 - Test records included: 0
+- Due dates adjusted: 239
+
+## By Due Date Adjustment Reason
+
+| Value | Count |
+| --- | ---: |
+| same_day_after_business_cutoff:2026-06-05 | 239 |
 
 ## By Cadence
 
 | Value | Count |
 | --- | ---: |
-| ASSESSMENT_CAMPAIGN_V1 | 9 |
-| RELATIONSHIP_BUILDING_V1 | 268 |
+| ASSESSMENT_CAMPAIGN_V1 | 7 |
+| RELATIONSHIP_BUILDING_V1 | 232 |
 
 ## By Cadence Stage
 
 | Value | Count |
 | --- | ---: |
-| CONNECTION_REQUEST | 61 |
+| CONNECTION_REQUEST | 55 |
 | DISCOVERY_ASK | 1 |
 | INTRO_MESSAGE | 1 |
-| NOT_STARTED | 211 |
-| STRATEGIC_CHECK_IN | 3 |
+| NOT_STARTED | 180 |
+| STRATEGIC_CHECK_IN | 2 |
 
 ## By Confidence
 
 | Value | Count |
 | --- | ---: |
-| high | 259 |
+| high | 221 |
 | medium | 18 |
 
 ## Safe Candidates
 
 | Person | Cadence | Stage | Task | Due | Owner |
 | --- | --- | --- | --- | --- | --- |
-| Daniel Klabunde | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Todd Patton | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Tim DiGioia | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Blair Schneider | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Nina Veaver | RELATIONSHIP_BUILDING_V1 | CONNECTION_REQUEST | Send relationship-oriented connection request | 2026-06-05 | brayson.grider@visiblegap.com |
-| BethAnn Langlois | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Patrick O'Donnell | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Elliot Voge | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Matt Thomas | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| John Hobelman | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Scott Makinson | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Ramon Sepulveda | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Scott Badger | RELATIONSHIP_BUILDING_V1 | CONNECTION_REQUEST | Send relationship-oriented connection request | 2026-06-05 | brayson.grider@visiblegap.com |
-| Braiddinn Plymate | ASSESSMENT_CAMPAIGN_V1 | NOT_STARTED | Send assessment-oriented connection request | 2026-06-05 | darrean.beller@visiblegap.com |
-| Deon Adams | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Michael Keibler | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Allen Johnson | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Darrin Guttman | RELATIONSHIP_BUILDING_V1 | STRATEGIC_CHECK_IN | Send strategic check-in | 2026-06-05 | chandler@visiblegap.com |
-| Janice Ruiz | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Jordan Freireich | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | brayson.grider@visiblegap.com |
-| Jackie Morales | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Hayes Donahue | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Lara Rollins | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Joseph Curry | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | darrean.beller@visiblegap.com |
-| Carmen Conley Flores | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Adara Mccammon | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Johnathan Fausz | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Sharron Banks | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Victorua McCann | RELATIONSHIP_BUILDING_V1 | CONNECTION_REQUEST | Send relationship-oriented connection request | 2026-06-05 | brayson.grider@visiblegap.com |
-| Dustin & Annette Starnes | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Eugene Garcia | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Nick Kossoudji | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | brayson.grider@visiblegap.com |
-| Shelly Prather Cruz | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Stanley Vischak | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Mudassir Sharif | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Philip Johnson | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Emily Worley | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | darrean.beller@visiblegap.com |
-| Stacey Brown | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Leilan McNally | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Jimmy Duffy | RELATIONSHIP_BUILDING_V1 | CONNECTION_REQUEST | Send relationship-oriented connection request | 2026-06-05 | brayson.grider@visiblegap.com |
-| Melissa Wolf | ASSESSMENT_CAMPAIGN_V1 | NOT_STARTED | Send assessment-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Alicia Ranney | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Dan Lucarelli | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Robert Bonjour | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Christian Tiu | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Ryan Henry | ASSESSMENT_CAMPAIGN_V1 | NOT_STARTED | Send assessment-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Garrett-Andrew Warner Sr. | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Thomas Coffey | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Mercy Ilias | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-05 | chandler@visiblegap.com |
-| Alex Guedras | RELATIONSHIP_BUILDING_V1 | CONNECTION_REQUEST | Send relationship-oriented connection request | 2026-06-05 | brayson.grider@visiblegap.com |
+| Jackie Morales | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| Hayes Donahue | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| Lara Rollins | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| Joseph Curry | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | darrean.beller@visiblegap.com |
+| Carmen Conley Flores | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| Adara Mccammon | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| Johnathan Fausz | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| Sharron Banks | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| Victorua McCann | RELATIONSHIP_BUILDING_V1 | CONNECTION_REQUEST | Send relationship-oriented connection request | 2026-06-08 | brayson.grider@visiblegap.com |
+| Dustin & Annette Starnes | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| Eugene Garcia | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| Nick Kossoudji | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | brayson.grider@visiblegap.com |
+| Shelly Prather Cruz | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| Stanley Vischak | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| Mudassir Sharif | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| Robert Bonjour | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| Christian Tiu | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| Ryan Henry | ASSESSMENT_CAMPAIGN_V1 | NOT_STARTED | Send assessment-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| Garrett-Andrew Warner Sr. | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| Thomas Coffey | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| Mercy Ilias | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| Alex Guedras | RELATIONSHIP_BUILDING_V1 | CONNECTION_REQUEST | Send relationship-oriented connection request | 2026-06-08 | brayson.grider@visiblegap.com |
+| Lisa Bowers | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| Taylor Harter | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| Jeremiah Little | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| Vicki Hubiak | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| Gabrielle Hosten | RELATIONSHIP_BUILDING_V1 | CONNECTION_REQUEST | Send relationship-oriented connection request | 2026-06-08 | brayson.grider@visiblegap.com |
+| Jonellee Youngdale | RELATIONSHIP_BUILDING_V1 | CONNECTION_REQUEST | Send relationship-oriented connection request | 2026-06-08 | brayson.grider@visiblegap.com |
+| Tammy Simpson | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| Carmine Izzo | RELATIONSHIP_BUILDING_V1 | CONNECTION_REQUEST | Send relationship-oriented connection request | 2026-06-08 | brayson.grider@visiblegap.com |
+| Mark Morek | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | brayson.grider@visiblegap.com |
+| Mack Nigh | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| Jennifier Bodovetz | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | brayson.grider@visiblegap.com |
+| Abimanuel Torres | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| Alyson Nicely | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| Deandre Reese | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| Terry Dennis | RELATIONSHIP_BUILDING_V1 | CONNECTION_REQUEST | Send relationship-oriented connection request | 2026-06-08 | brayson.grider@visiblegap.com |
+| Steven Elliot | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| Erik Chapman | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| Sree Panchangam | RELATIONSHIP_BUILDING_V1 | CONNECTION_REQUEST | Send relationship-oriented connection request | 2026-06-08 | brayson.grider@visiblegap.com |
+| Brian Baldwin | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| John Sutton | ASSESSMENT_CAMPAIGN_V1 | NOT_STARTED | Send assessment-oriented connection request | 2026-06-08 | darrean.beller@visiblegap.com |
+| Topher Hammond | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| Abbey Walker | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| LaShaunna Bentley | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| Lydia Oginibo | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| Paul Sylvester | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| David Manley | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| Shirisha Chennamaraju | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-08 | chandler@visiblegap.com |
+| "Cat" Catherine Bushong | RELATIONSHIP_BUILDING_V1 | CONNECTION_REQUEST | Send relationship-oriented connection request | 2026-06-08 | brayson.grider@visiblegap.com |
 
 ## Future Apply Stub
 

@@ -25,6 +25,7 @@
     "legacy:retrofit:apply": "node scripts/applyLegacyRetrofitPlan.js",
     "legacy:tasks:plan": "node scripts/planLegacyTaskRetrofit.js",
     "queues:inspect-task-relationships": "node scripts/inspectTaskRelationships.js",
+    "queues:diagnose-classification": "node scripts/diagnoseQueueClassification.js",
     "queues:plan-missing-next-tasks": "node scripts/planMissingNextTasks.js",
     "queues:apply-missing-next-tasks": "node scripts/applyMissingNextTasks.js",
     "legacy:tasks:apply": "node scripts/applyLegacyTaskRetrofit.js",
