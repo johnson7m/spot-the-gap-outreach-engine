@@ -25,6 +25,8 @@
     "legacy:retrofit:apply": "node scripts/applyLegacyRetrofitPlan.js",
     "legacy:tasks:plan": "node scripts/planLegacyTaskRetrofit.js",
     "queues:inspect-task-relationships": "node scripts/inspectTaskRelationships.js",
+    "queues:plan-missing-next-tasks": "node scripts/planMissingNextTasks.js",
+    "queues:apply-missing-next-tasks": "node scripts/applyMissingNextTasks.js",
     "legacy:tasks:apply": "node scripts/applyLegacyTaskRetrofit.js",
     "legacy:owners:plan": "node scripts/planLegacyOwnerCleanup.js",
     "legacy:owners:apply": "node scripts/applyLegacyOwnerCleanup.js"

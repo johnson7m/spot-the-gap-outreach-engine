@@ -43,6 +43,10 @@ Current data strategy:
   relationship writes remain disabled.
 - Return warnings when task relationships or owner/assignee mappings are not
   available from Twenty.
+- Hide obvious test/synthetic People by default. Use `includeTestRecords=true`
+  only for diagnostics.
+- Move broad `timelineActivities` pagination noise into diagnostics metadata
+  instead of user-facing queue warnings.
 - Do not write to CRM, Supabase, or assessment records during queue fetches.
 
 ## Fresh Lead Queue
@@ -55,6 +59,9 @@ Inclusion logic:
 - Person `cadenceStage=CONNECTION_REQUEST` or `NOT_STARTED`.
 - Person `latestTouchStatus=DRAFTED`.
 - Open task is attached when the API can link one to the Person.
+- If no open Task exists, keep the Person visible and add
+  `suggestedResolutionActions=["create_next_task"]` with the warning
+  `No open task exists yet; create the first cadence task.`
 
 Priority logic:
 
@@ -149,6 +156,24 @@ Legacy task relationship cleanup:
   rows.
 - It does not create replacement Tasks, reopen completed Tasks, generate
   cadence Tasks, or change assessment webhook behavior.
+
+Missing next-task planning:
+
+- `npm run queues:plan-missing-next-tasks` finds People with active,
+  non-terminal cadence state and no open Task resolved through taskTargets or
+  Person markers.
+- The planner writes `data/missing-next-task-plan.json` and
+  `data/missing-next-task-summary.md`.
+- It is read-only and does not create Tasks.
+- `npm run queues:apply-missing-next-tasks` is implemented as a guarded apply
+  path. It is dry-run by default and requires
+  `MISSING_NEXT_TASK_APPLY_ENABLED=true`, `LIVE_TEST=true`, and
+  `MISSING_NEXT_TASK_BATCH_SIZE=<n>` before any Task creation.
+- The apply path creates only missing Tasks for safe plan rows, rechecks for
+  existing open Tasks, creates a Person `taskTarget`, verifies the link, writes
+  audit/event rows, and does not update People or cadence fields.
+- Company taskTarget links remain optional behind
+  `MISSING_NEXT_TASK_LINK_COMPANY=true`.
 
 ## Unassigned Tasks Queue
 
@@ -277,6 +302,17 @@ Inclusion logic:
 - `enrichmentStatus=NEEDS_REVIEW` or `PARTIAL`
 - duplicate warning is present
 - no next task despite a non-terminal cadence
+- test/synthetic record when diagnostics include test records
+
+Review reasons:
+
+- `missing_company`
+- `missing_email`
+- `missing_linkedin`
+- `enrichment_partial`
+- `missing_next_task`
+- `test_record`
+- `manual_review`
 
 Priority logic:
 

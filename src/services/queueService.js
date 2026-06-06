@@ -1,3 +1,5 @@
+import { detectTestRecord } from '../utils/testRecordDetection.js';
+
 const QUEUE_DEFINITIONS = {
   'fresh-leads': {
     slug: 'fresh-leads',
@@ -87,12 +89,24 @@ export function buildQueue({
       workspaceMembersById
     })
   );
+  const visiblePeople = normalizedQuery.includeTestRecords
+    ? normalizedPeople
+    : normalizedPeople.filter((person) => !person.isTestRecord);
+  const hiddenTestRecords = normalizedQuery.includeTestRecords
+    ? 0
+    : normalizedPeople.filter((person) => person.isTestRecord).length;
+  const hiddenTestPersonIds = new Set(
+    normalizedQuery.includeTestRecords
+      ? []
+      : normalizedPeople.filter((person) => person.isTestRecord).map((person) => person.personId)
+  );
   const warnings = [];
   const candidates = selectQueueCandidates({
     queueSlug,
-    people: normalizedPeople,
+    people: visiblePeople,
     tasks: normalizedTasks,
     tasksByPersonId,
+    hiddenTestPersonIds,
     query: normalizedQuery,
     warnings,
     now
@@ -118,6 +132,9 @@ export function buildQueue({
     offset: normalizedQuery.offset,
     ownerScope: normalizedQuery.ownerScope,
     assigneeScope: normalizedQuery.assigneeScope,
+    diagnostics: {
+      hiddenTestRecords
+    },
     warnings: uniqueStrings(warnings)
   };
 }
@@ -135,6 +152,8 @@ export function normalizeQueueQuery(query = {}, workspaceUser = {}) {
     query.includeOverdue === undefined ? true : normalizeBoolean(query.includeOverdue);
   const includeUnassigned =
     query.includeUnassigned === undefined ? false : normalizeBoolean(query.includeUnassigned);
+  const includeTestRecords =
+    query.includeTestRecords === undefined ? false : normalizeBoolean(query.includeTestRecords);
   const requestedOwnerScope = normalizeSelect(query.requestedOwnerScope ?? query.ownerScope);
   const requestedAssigneeScope = normalizeSelect(query.requestedAssigneeScope ?? query.assigneeScope);
   const ownerScope =
@@ -159,6 +178,7 @@ export function normalizeQueueQuery(query = {}, workspaceUser = {}) {
       typeof query.dueBeforeProvided === 'boolean' ? query.dueBeforeProvided : Boolean(query.dueBefore),
     includeOverdue,
     includeUnassigned,
+    includeTestRecords,
     ownerScope,
     requestedOwnerScope: requestedOwnerScope ? requestedOwnerScope.toLowerCase() : null,
     assigneeScope,
@@ -167,7 +187,16 @@ export function normalizeQueueQuery(query = {}, workspaceUser = {}) {
   };
 }
 
-function selectQueueCandidates({ queueSlug, people, tasks, tasksByPersonId, query, warnings, now }) {
+function selectQueueCandidates({
+  queueSlug,
+  people,
+  tasks,
+  tasksByPersonId,
+  hiddenTestPersonIds,
+  query,
+  warnings,
+  now
+}) {
   switch (queueSlug) {
     case 'fresh-leads':
       return people
@@ -176,13 +205,17 @@ function selectQueueCandidates({ queueSlug, people, tasks, tasksByPersonId, quer
           person,
           task: firstOpenTask(tasksByPersonId.get(person.personId)),
           source: 'twenty:person',
-          itemWarnings: buildFreshLeadWarnings(person, tasksByPersonId.get(person.personId))
+          itemWarnings: buildFreshLeadWarnings(person, tasksByPersonId.get(person.personId)),
+          suggestedResolutionActions: firstOpenTask(tasksByPersonId.get(person.personId))
+            ? []
+            : ['create_next_task']
         }));
 
     case 'follow-ups':
       return filterFollowUpTasks({
         tasks,
         query,
+        hiddenTestPersonIds,
         warnings
       })
         .map((task) => {
@@ -226,20 +259,22 @@ function selectQueueCandidates({ queueSlug, people, tasks, tasksByPersonId, quer
       return people
         .map((person) => {
           const openTask = firstOpenTask(tasksByPersonId.get(person.personId));
-          const reviewWarnings = getPipelineReviewWarnings(person, openTask);
+          const review = getPipelineReview(person, openTask);
 
           return {
             person,
             openTask,
-            reviewWarnings
+            reviewWarnings: review.warnings,
+            reviewReasons: review.reasons
           };
         })
         .filter(({ reviewWarnings }) => reviewWarnings.length > 0)
-        .map(({ person, openTask, reviewWarnings }) => toQueueItem({
+        .map(({ person, openTask, reviewWarnings, reviewReasons }) => toQueueItem({
           person,
           task: openTask,
           source: 'twenty:person',
-          itemWarnings: reviewWarnings
+          itemWarnings: reviewWarnings,
+          reviewReasons
         }));
 
     default:
@@ -250,6 +285,7 @@ function selectQueueCandidates({ queueSlug, people, tasks, tasksByPersonId, quer
 function normalizePersonRecord({ person = {}, tasks = [], workspaceMembersById = new Map() } = {}) {
   const owner = normalizeOwner(person, 'person', workspaceMembersById);
   const openTasks = tasks.filter(isOpenTask);
+  const testRecord = detectTestRecord(person);
 
   return {
     raw: person,
@@ -276,6 +312,8 @@ function normalizePersonRecord({ person = {}, tasks = [], workspaceMembersById =
     leadSource: normalizeSelect(person.leadSource),
     source: normalizeSelect(person.leadSource) || 'TWENTY_PERSON',
     owner,
+    isTestRecord: testRecord.isTestRecord,
+    testRecordReasons: testRecord.reasons,
     openTaskCount: openTasks.length,
     taskWarnings: tasks.flatMap((task) => task.warnings ?? [])
   };
@@ -326,7 +364,14 @@ function normalizeTaskRecord({
   };
 }
 
-function toQueueItem({ person, task, source, itemWarnings = [] }) {
+function toQueueItem({
+  person,
+  task,
+  source,
+  itemWarnings = [],
+  suggestedResolutionActions = [],
+  reviewReasons = []
+}) {
   const owner = mergeOwnerContexts(person?.owner, task?.assignee);
 
   return {
@@ -353,13 +398,21 @@ function toQueueItem({ person, task, source, itemWarnings = [] }) {
     assignedRep: owner?.email ?? owner?.name ?? null,
     assignedRepDetails: owner?.taskAssignee ?? task?.assignee ?? null,
     source,
+    isTestRecord: Boolean(person?.isTestRecord),
+    testRecordReasons: person?.testRecordReasons ?? [],
+    reviewReasons,
     personLinkSource: task?.personLinkSource ?? null,
     personResolutionPath: task?.personResolutionPath ?? [],
     personResolutionConfidence: task?.personResolutionConfidence ?? null,
     personResolutionEvidence: task?.personResolutionEvidence ?? [],
     targetCompanyId: task?.targetCompanyId ?? null,
     queueBucket: task && !task.personId ? 'unassigned_tasks' : null,
-    suggestedResolutionActions: task && !task.personId ? UNASSIGNED_TASK_ACTIONS : [],
+    suggestedResolutionActions:
+      suggestedResolutionActions.length > 0
+        ? suggestedResolutionActions
+        : task && !task.personId
+          ? UNASSIGNED_TASK_ACTIONS
+          : [],
     warnings: uniqueStrings([
       ...(person?.taskWarnings ?? []),
       ...(task?.warnings ?? []),
@@ -467,34 +520,59 @@ function isStaleRecovery(person, now) {
   return person.latestTouchStatus === 'NO_RESPONSE' && Boolean(person.cadenceStage);
 }
 
-function getPipelineReviewWarnings(person, openTask) {
+function getPipelineReview(person, openTask) {
   const warnings = [];
+  const reasons = [];
 
-  for (const [fieldName, value] of [
-    ['email', person.email],
-    ['LinkedIn URL', person.linkedinUrl],
-    ['company', person.companyName],
-    ['cadence name', person.cadenceName],
-    ['cadence stage', person.cadenceStage]
-  ]) {
-    if (!value) {
-      warnings.push(`Missing ${fieldName}.`);
-    }
+  if (!person.email) {
+    warnings.push('Missing email.');
+    reasons.push('missing_email');
+  }
+
+  if (!person.linkedinUrl) {
+    warnings.push('Missing LinkedIn URL.');
+    reasons.push('missing_linkedin');
+  }
+
+  if (!person.companyName) {
+    warnings.push('Missing company.');
+    reasons.push('missing_company');
+  }
+
+  if (!person.cadenceName) {
+    warnings.push('Missing cadence name.');
+    reasons.push('manual_review');
+  }
+
+  if (!person.cadenceStage) {
+    warnings.push('Missing cadence stage.');
+    reasons.push('manual_review');
   }
 
   if (REVIEW_ENRICHMENT_STATUSES.has(person.enrichmentStatus)) {
     warnings.push(`Enrichment status requires review: ${person.enrichmentStatus}.`);
+    reasons.push('enrichment_partial');
   }
 
   if (person.raw?.duplicateWarning || person.raw?.duplicateWarnings?.length) {
     warnings.push('Duplicate warning present; merge review may be needed.');
+    reasons.push('manual_review');
   }
 
   if (person.cadenceName && !isTerminalCadenceStage(person.cadenceStage) && !openTask) {
     warnings.push('No open next task found despite non-terminal cadence.');
+    reasons.push('missing_next_task');
   }
 
-  return warnings;
+  if (person.isTestRecord) {
+    warnings.push('Record appears to be a test or synthetic lead.');
+    reasons.push('test_record');
+  }
+
+  return {
+    warnings,
+    reasons: uniqueStrings(reasons)
+  };
 }
 
 function isDueOpenTask(task, query) {
@@ -515,7 +593,12 @@ function isDueOpenTask(task, query) {
   return toDateOnly(dueDate) === toDateOnly(query.dueBefore);
 }
 
-function filterFollowUpTasks({ tasks = [], query = {}, warnings = [] } = {}) {
+function filterFollowUpTasks({
+  tasks = [],
+  query = {},
+  hiddenTestPersonIds = new Set(),
+  warnings = []
+} = {}) {
   const unassignedCount = tasks.filter(isUnassignedTask).length;
 
   if (!query.includeUnassigned && unassignedCount > 0) {
@@ -523,6 +606,7 @@ function filterFollowUpTasks({ tasks = [], query = {}, warnings = [] } = {}) {
   }
 
   return tasks
+    .filter((task) => !hiddenTestPersonIds.has(task.personId))
     .filter((task) => query.includeUnassigned || !isUnassignedTask(task))
     .filter((task) => isDueOpenTask(task, query));
 }
@@ -621,7 +705,7 @@ function buildFreshLeadWarnings(person, tasks) {
     return [];
   }
 
-  return ['No open task found for this fresh lead; task relationship may be unavailable.'];
+  return ['No open task exists yet; create the first cadence task.'];
 }
 
 function buildTaskAssociationWarnings(task, person) {

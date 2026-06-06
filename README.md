@@ -212,6 +212,8 @@ npm run queues:inspect-task-relationships -- --person-id=<twenty-person-id>
 npm run queues:inspect-task-relationships -- --task-id=<twenty-task-id>
 npm run queues:inspect-task-relationships -- --json
 npm run queues:inspect-task-relationships -- --csv
+npm run queues:plan-missing-next-tasks
+npm run queues:apply-missing-next-tasks
 npm run legacy:tasks:plan
 npm run legacy:tasks:apply
 ```
@@ -235,6 +237,51 @@ The task planner identifies existing Tasks missing taskTarget relationships and
 recommends `link_task_to_person`, `link_task_to_company`, `leave_unassigned`, or
 `manual_review`. The apply command remains dry-run unless both live guards are
 enabled; in dry-run it prints the eligible taskTarget payloads without writing.
+
+The missing next-task planner identifies People with active, non-terminal
+cadence state and no open Task resolved through taskTargets or Person markers:
+
+```bash
+npm run queues:plan-missing-next-tasks
+```
+
+It writes:
+
+- `data/missing-next-task-plan.json`
+- `data/missing-next-task-summary.md`
+
+Test/synthetic records are hidden by default. Set `INCLUDE_TEST_RECORDS=true`
+only for diagnostics. `queues:apply-missing-next-tasks` remains dry-run unless
+every live guard is explicitly set.
+
+Dry-run apply:
+
+```bash
+npm run queues:apply-missing-next-tasks
+```
+
+Live missing next-task creation requires an explicit batch:
+
+```bash
+MISSING_NEXT_TASK_APPLY_ENABLED=true LIVE_TEST=true MISSING_NEXT_TASK_BATCH_SIZE=10 MISSING_NEXT_TASK_OFFSET=0 npm run queues:apply-missing-next-tasks
+```
+
+Apply rules:
+
+- reads local `data/missing-next-task-plan.json`
+- creates Tasks only for `safeToCreate=true` rows
+- skips test records unless `MISSING_NEXT_TASK_INCLUDE_TEST_RECORDS=true`
+- skips review records unless explicitly forced
+- rechecks Twenty for an existing open Task before writing
+- uses `personId + cadenceName + cadenceStage + recommendedTaskType` as the
+  dedupe key
+- creates `POST /rest/taskTargets` Person links after Task creation
+- optionally links Company only with `MISSING_NEXT_TASK_LINK_COMPANY=true`
+- verifies the Task and Person taskTarget after creation
+- writes `crm_sync_logs` and `outbound_events` with
+  `event_type=missing_next_task_created`
+- does not update People, change cadence stage, or alter assessment webhook
+  behavior
 
 Guarded task relationship apply links existing Tasks to existing People only:
 
@@ -301,6 +348,20 @@ Follow-Ups exclude unassigned Tasks by default and return a warning/count such
 as `22 unassigned tasks hidden. Review Unassigned Tasks queue.` The workspace
 should review those records through `GET /api/queues/unassigned-tasks` rather
 than showing them as "Unknown person" in the normal Follow-Up Queue.
+
+Fresh Leads with `NOT_STARTED` or `CONNECTION_REQUEST` cadence remain visible
+even when no open Task exists. Those items include
+`suggestedResolutionActions=["create_next_task"]` and the warning
+`No open task exists yet; create the first cadence task.` Pipeline Review items
+include structured `reviewReasons` such as `missing_company`,
+`missing_email`, `missing_linkedin`, `enrichment_partial`,
+`missing_next_task`, `test_record`, and `manual_review`.
+
+Queue responses hide obvious test/synthetic People by default and report the
+count as `data.diagnostics.hiddenTestRecords`. Use `includeTestRecords=true`
+for diagnostics. Broad `timelineActivities` pagination noise is moved to
+`data.diagnostics.timelinePaginationWarning` instead of normal top-level queue
+warnings.
 
 Workspace auth flags:
 

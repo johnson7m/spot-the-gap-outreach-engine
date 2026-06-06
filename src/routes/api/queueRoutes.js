@@ -81,6 +81,7 @@ export async function handleQueueFetch(
           ownerScope: result.ownerScope,
           assigneeScope: result.assigneeScope,
           dataSource: result.dataSource,
+          diagnostics: result.diagnostics,
           warnings: result.warnings
         },
         warnings: result.warnings

@@ -41,16 +41,38 @@ export async function getOutboundQueueWorkflow({
     query: normalizedQuery,
     now
   });
+  const warningBuckets = splitQueueWarnings({
+    recordWarnings: records.warnings ?? [],
+    paginationWarnings: buildPaginationWarnings(records.pagination)
+  });
 
   return {
     ...queue,
     dataSource: source.provider ?? 'unknown',
+    diagnostics: {
+      ...(queue.diagnostics ?? {}),
+      timelinePaginationWarning: warningBuckets.timelinePaginationWarning
+    },
     warnings: [
-      ...(records.warnings ?? []),
-      ...buildPaginationWarnings(records.pagination),
+      ...warningBuckets.userWarnings,
       ...(queue.warnings ?? [])
     ]
   };
+}
+
+function splitQueueWarnings({ recordWarnings = [], paginationWarnings = [] } = {}) {
+  const timelineWarnings = [...recordWarnings, ...paginationWarnings].filter(isTimelinePaginationWarning);
+
+  return {
+    timelinePaginationWarning: timelineWarnings[0] ?? null,
+    userWarnings: [...recordWarnings, ...paginationWarnings].filter(
+      (warning) => !isTimelinePaginationWarning(warning)
+    )
+  };
+}
+
+function isTimelinePaginationWarning(warning = '') {
+  return /timelineActivities pagination stopped/i.test(String(warning));
 }
 
 function buildPaginationWarnings(pagination) {

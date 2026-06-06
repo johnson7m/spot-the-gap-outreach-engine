@@ -49,7 +49,32 @@ Open statuses:
 - `NOT_STARTED`
 
 Fresh Lead Queue warnings are only emitted when no open task can be associated
-with the Person after taskTarget and fallback resolution.
+with the Person after taskTarget and fallback resolution. In that case the
+queue item remains actionable, includes `suggestedResolutionActions:
+["create_next_task"]`, and shows:
+
+`No open task exists yet; create the first cadence task.`
+
+## Test Record Filtering
+
+Queue reads flag obvious test/synthetic People with `isTestRecord` and
+`testRecordReasons`. Default queue responses hide those records so staging
+tests do not pollute normal rep queues. Diagnostics can include them with:
+
+```text
+includeTestRecords=true
+```
+
+Synthetic detection currently checks:
+
+- email values containing `example.com`, `webhooktest.com`, `sync-test`,
+  `cadence-test`, or `quick-capture-test`
+- Person names containing `Test`, `Webhook Test`, `CadenceTest`, `WriteTest`,
+  or `Scooby Doo`
+- company names that clearly contain test, sync-test, quick-capture-test, or
+  cadence-test markers
+
+Hidden test count is returned in `data.diagnostics.hiddenTestRecords`.
 
 ## Owner And Assignee Resolution
 
@@ -108,12 +133,16 @@ Expected non-blocking warnings include:
 | `Task relationship inference used Person name matching...` | The Task can be associated only by matching task text to one unique Person name. |
 | `Task relationship inference used Company matching only...` | The Task can be associated only through Company context and needs manual review before linking. |
 | `Task target exposes Company but no Person...` | The Task is linked to a Company only. |
-| `No open task found for this fresh lead...` | No open task matched the Person after relationship resolution. |
+| `No open task exists yet; create the first cadence task.` | Fresh Lead has no open Task and can be queued for first-task creation. |
 | `Ownership unavailable...` | Neither owner nor assignee email could be resolved. |
 | `Some queue items do not expose owner or assignee email data from Twenty.` | One or more items could not be scoped confidently for a rep. |
 
 Warnings should guide cleanup and schema improvements. They should not hide
 queue records unless the user role explicitly cannot access the queue.
+Noisy `timelineActivities` pagination messages are moved to
+`data.diagnostics.timelinePaginationWarning` and should not be shown as normal
+queue warnings unless the timeline data was required for a specific queue-item
+resolution.
 
 ## Queue Definitions
 
@@ -123,6 +152,8 @@ Fresh Leads:
 - `cadenceStage` is `CONNECTION_REQUEST` or `NOT_STARTED`
 - `latestTouchStatus=DRAFTED`
 - open task when possible
+- no open Task keeps the item visible with `create_next_task` as a suggested
+  resolution action
 
 Follow-Ups:
 
@@ -160,6 +191,9 @@ Pipeline Review:
 - enrichment status is `NEEDS_REVIEW` or `PARTIAL`
 - duplicate warning exists
 - non-terminal cadence exists but no next task is found
+- `reviewReasons` separate `missing_company`, `missing_email`,
+  `missing_linkedin`, `enrichment_partial`, `missing_next_task`,
+  `test_record`, and `manual_review`
 
 ## Known Limitations
 
@@ -191,6 +225,57 @@ If `TASK_RETROFIT_PLAN_PATH` is provided, or the default
 `data/legacy-task-retrofit-plan.json` exists, the inspection output also marks
 planned task-retrofit candidates as `linked` or `still_unlinked` based on the
 current Twenty `taskTargets` read.
+
+Plan missing next-task candidates without writing:
+
+```bash
+npm run queues:plan-missing-next-tasks
+```
+
+The planner writes:
+
+- `data/missing-next-task-plan.json`
+- `data/missing-next-task-summary.md`
+
+It finds People with active, non-terminal cadence state and no open Task
+resolved through taskTargets or Person markers. Test records are hidden by
+default; set `INCLUDE_TEST_RECORDS=true` for diagnostics.
+
+Guarded apply path:
+
+```bash
+npm run queues:apply-missing-next-tasks
+```
+
+This command is implemented but remains dry-run unless every live guard is set:
+
+```bash
+MISSING_NEXT_TASK_APPLY_ENABLED=true \
+LIVE_TEST=true \
+MISSING_NEXT_TASK_BATCH_SIZE=10 \
+MISSING_NEXT_TASK_OFFSET=0 \
+npm run queues:apply-missing-next-tasks
+```
+
+Live apply rules:
+
+- Reads `MISSING_NEXT_TASK_PLAN_PATH`, default
+  `data/missing-next-task-plan.json`.
+- Uses only `safeToCreate=true` rows by default.
+- Skips test/synthetic records unless
+  `MISSING_NEXT_TASK_INCLUDE_TEST_RECORDS=true`.
+- Skips review records unless explicitly included and forced.
+- Rechecks Twenty for an open Task linked by taskTarget or `Person ID` body
+  marker before creating anything.
+- Creates the Task first, then creates `taskTargets` with
+  `{ "taskId": "<new-task-id>", "targetPersonId": "<person-id>" }`.
+- Creates optional Company taskTargets only when
+  `MISSING_NEXT_TASK_LINK_COMPANY=true` and the plan row includes a Company ID.
+- Verifies both the Task and Person taskTarget after creation.
+- Writes `crm_sync_logs` and `outbound_events` with
+  `event_type=missing_next_task_created`.
+- Does not patch People, change cadence stages, reopen Tasks, or alter
+  assessment webhook behavior.
 
 ## Legacy Task Target Apply
 

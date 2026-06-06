@@ -509,6 +509,8 @@ Supported query params:
 - `includeOverdue`: default `true`; `false` limits follow-ups to the selected
   due date.
 - `includeUnassigned`: default `false`; applies to Follow-Ups.
+- `includeTestRecords`: default `false`; shows test/synthetic People for
+  diagnostics.
 - `status`: optional Task status filter for `unassigned-tasks`.
 
 Response:
@@ -557,6 +559,9 @@ Response:
           "source": "task_assignee_workspace_member"
         },
         "source": "twenty:person",
+        "isTestRecord": false,
+        "testRecordReasons": [],
+        "reviewReasons": [],
         "personLinkSource": "task_target",
         "personResolutionPath": ["taskTarget.targetPersonId"],
         "personResolutionConfidence": "high",
@@ -573,6 +578,10 @@ Response:
     "ownerScope": "mine",
     "assigneeScope": "mine",
     "dataSource": "twenty",
+    "diagnostics": {
+      "hiddenTestRecords": 0,
+      "timelinePaginationWarning": null
+    },
     "warnings": []
   },
   "warnings": [],
@@ -586,6 +595,9 @@ Fresh Leads criteria:
 - Person `cadenceStage` is `CONNECTION_REQUEST` or `NOT_STARTED`.
 - Person `latestTouchStatus` is `DRAFTED`.
 - Open task is included when a matching task can be found.
+- If no open task exists, the Person remains visible with
+  `suggestedResolutionActions=["create_next_task"]` and the item warning
+  `No open task exists yet; create the first cadence task.`
 
 Follow-Ups criteria:
 
@@ -656,6 +668,18 @@ Pipeline Review criteria:
 - `enrichmentStatus=NEEDS_REVIEW` or `PARTIAL`.
 - Duplicate warning fields are present.
 - Non-terminal cadence exists but no open next task was found.
+- Obvious test/synthetic records are included only when
+  `includeTestRecords=true`.
+
+Pipeline Review items include `reviewReasons` values such as:
+
+- `missing_company`
+- `missing_email`
+- `missing_linkedin`
+- `enrichment_partial`
+- `missing_next_task`
+- `test_record`
+- `manual_review`
 
 Relationship fallback:
 
@@ -664,6 +688,27 @@ Relationship fallback:
   parses `Person ID: <id>` from task body markdown.
 - Items using this fallback include a warning so the workspace can display the
   limitation clearly.
+
+Diagnostics:
+
+- Obvious test/synthetic People are hidden by default. Hidden count is returned
+  as `data.diagnostics.hiddenTestRecords`.
+- Broad `timelineActivities` pagination messages are returned as
+  `data.diagnostics.timelinePaginationWarning` instead of normal top-level
+  queue warnings unless timeline data becomes required for an item-specific
+  resolution.
+
+Missing next-task operations:
+
+- `npm run queues:plan-missing-next-tasks` creates a local dry-run plan for
+  People with active non-terminal cadence state and no open Task.
+- `npm run queues:apply-missing-next-tasks` reads that local plan and remains
+  dry-run unless `MISSING_NEXT_TASK_APPLY_ENABLED=true`, `LIVE_TEST=true`, and
+  `MISSING_NEXT_TASK_BATCH_SIZE=<n>` are set.
+- The apply path is script-only for now; no workspace endpoint exists yet.
+- Live apply creates a Twenty Task, links it to the Person through
+  `taskTargets`, verifies the link, and records CRM audit plus outbound event
+  rows.
 
 ## POST /api/tasks/:id/complete
 

@@ -4,6 +4,7 @@ import { requireWorkspaceAuth } from '../src/middleware/supabaseWorkspaceAuth.js
 import { handleQueueFetch } from '../src/routes/api/queueRoutes.js';
 import { processAssessmentSubmission } from '../src/workflows/assessmentWorkflow.js';
 import { getOutboundQueueWorkflow } from '../src/workflows/outbound/getQueueWorkflow.js';
+import { buildMissingNextTaskPlans } from '../src/workflows/outbound/missingNextTaskPlanner.js';
 
 const baseConfig = {
   env: 'test',
@@ -195,6 +196,123 @@ describe('outbound queue workflow', () => {
     );
     expect(freshLead.warnings).not.toContain(
       'No open task found for this fresh lead; task relationship may be unavailable.'
+    );
+  });
+
+  it('keeps fresh leads actionable when no open task exists', async () => {
+    const result = await getOutboundQueueWorkflow({
+      queueSlug: 'fresh-leads',
+      query: {
+        ownerScope: 'all'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({
+        tasks: []
+      }),
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+    const freshLead = result.items.find((item) => item.personId === 'people-fresh');
+
+    expect(freshLead.warnings).toContain(
+      'No open task exists yet; create the first cadence task.'
+    );
+    expect(freshLead.suggestedResolutionActions).toEqual(['create_next_task']);
+  });
+
+  it('hides obvious test records by default and includes them only when requested', async () => {
+    const testPerson = {
+      ...queuePeople()[0],
+      id: 'people-test-record',
+      name: {
+        firstName: 'Scooby',
+        lastName: 'Doo'
+      },
+      company: {
+        name: 'Visible Gap Sync Test Company'
+      },
+      emails: {
+        primaryEmail: 'visiblegap.sync-test@example.com'
+      }
+    };
+    const hiddenResult = await getOutboundQueueWorkflow({
+      queueSlug: 'fresh-leads',
+      query: {
+        ownerScope: 'all'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({
+        people: [testPerson],
+        tasks: []
+      }),
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+    const includedResult = await getOutboundQueueWorkflow({
+      queueSlug: 'fresh-leads',
+      query: {
+        ownerScope: 'all',
+        includeTestRecords: 'true'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({
+        people: [testPerson],
+        tasks: []
+      }),
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+
+    expect(hiddenResult.items).toHaveLength(0);
+    expect(hiddenResult.diagnostics.hiddenTestRecords).toBe(1);
+    expect(includedResult.items).toHaveLength(1);
+    expect(includedResult.items[0]).toMatchObject({
+      personId: 'people-test-record',
+      isTestRecord: true
+    });
+  });
+
+  it('moves noisy timeline pagination warnings into diagnostics metadata', async () => {
+    const result = await getOutboundQueueWorkflow({
+      queueSlug: 'fresh-leads',
+      query: {},
+      config: baseConfig,
+      workspaceUser: repUser,
+      dataSource: fakeQueueDataSource({
+        warnings: [
+          'Twenty timelineActivities pagination stopped at 10 pages with more records available; queue relationship resolution may be incomplete.'
+        ]
+      }),
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+
+    expect(result.warnings).not.toContain(
+      'Twenty timelineActivities pagination stopped at 10 pages with more records available; queue relationship resolution may be incomplete.'
+    );
+    expect(result.diagnostics.timelinePaginationWarning).toBe(
+      'Twenty timelineActivities pagination stopped at 10 pages with more records available; queue relationship resolution may be incomplete.'
+    );
+  });
+
+  it('adds pipeline review reasons for review categories', async () => {
+    const result = await getOutboundQueueWorkflow({
+      queueSlug: 'pipeline-review',
+      query: {},
+      config: baseConfig,
+      workspaceUser: repUser,
+      dataSource: fakeQueueDataSource(),
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+    const reviewItem = result.items.find((item) => item.personId === 'people-review');
+
+    expect(reviewItem.reviewReasons).toEqual(
+      expect.arrayContaining([
+        'missing_email',
+        'missing_linkedin',
+        'missing_company',
+        'enrichment_partial',
+        'missing_next_task'
+      ])
     );
   });
 
@@ -496,6 +614,132 @@ describe('queue API auth', () => {
   });
 });
 
+describe('missing next-task planner', () => {
+  it('finds non-terminal People with no open task', () => {
+    const result = buildMissingNextTaskPlans(
+      {
+        people: [
+          {
+            id: 'people-missing-task',
+            name: {
+              firstName: 'Parker',
+              lastName: 'Lane'
+            },
+            company: {
+              name: 'Northstar Operations Co'
+            },
+            emails: {
+              primaryEmail: 'parker@northstarops.com'
+            },
+            cadenceName: 'ASSESSMENT_CAMPAIGN_V1',
+            cadenceStage: 'CONNECTION_REQUEST',
+            latestTouchStatus: 'DRAFTED',
+            latestTouchChannel: 'LINKEDIN',
+            nextOutboundTouchDate: '2026-06-05',
+            owner: {
+              userEmail: 'rep@visiblegap.com'
+            }
+          }
+        ],
+        tasks: [],
+        taskTargets: []
+      },
+      {
+        now: new Date('2026-06-03T15:00:00.000Z')
+      }
+    );
+
+    expect(result.records).toHaveLength(1);
+    expect(result.records[0]).toMatchObject({
+      personId: 'people-missing-task',
+      recommendedTaskTitle: 'Send assessment-oriented connection request',
+      recommendedTaskType: 'connection_request',
+      recommendedDueDate: '2026-06-05',
+      confidence: 'high',
+      safeToCreate: true
+    });
+  });
+
+  it('excludes terminal, paused, completed, and active-client People', () => {
+    const result = buildMissingNextTaskPlans({
+      people: [
+        missingTaskPerson('people-completed', {
+          cadenceStage: 'COMPLETED'
+        }),
+        missingTaskPerson('people-paused', {
+          cadenceStage: 'PAUSED'
+        }),
+        missingTaskPerson('people-client', {
+          leadstageAuto: 'ACTIVE_CLIENT'
+        }),
+        missingTaskPerson('people-declined', {
+          latestTouchStatus: 'DECLINED'
+        })
+      ],
+      tasks: [],
+      taskTargets: []
+    });
+
+    expect(result.records).toHaveLength(0);
+  });
+
+  it('hides missing-task test records by default and can include them for diagnostics', () => {
+    const records = {
+      people: [
+        missingTaskPerson('people-test-missing-task', {
+          name: {
+            firstName: 'Webhook',
+            lastName: 'Test'
+          },
+          company: {
+            name: 'Cadence Test Company'
+          },
+          emails: {
+            primaryEmail: 'cadence-test@example.com'
+          }
+        })
+      ],
+      tasks: [],
+      taskTargets: []
+    };
+
+    const hidden = buildMissingNextTaskPlans(records);
+    const included = buildMissingNextTaskPlans(records, {
+      includeTestRecords: true
+    });
+
+    expect(hidden.records).toHaveLength(0);
+    expect(hidden.hiddenTestRecords).toBe(1);
+    expect(included.records).toHaveLength(1);
+    expect(included.records[0]).toMatchObject({
+      isTestRecord: true,
+      safeToCreate: false
+    });
+  });
+
+  it('does not plan a next task when an open task is already linked', () => {
+    const result = buildMissingNextTaskPlans({
+      people: [missingTaskPerson('people-has-task')],
+      tasks: [
+        {
+          id: 'tasks-existing',
+          status: 'TODO',
+          title: 'Existing task'
+        }
+      ],
+      taskTargets: [
+        {
+          id: 'task-target-existing',
+          taskId: 'tasks-existing',
+          targetPersonId: 'people-has-task'
+        }
+      ]
+    });
+
+    expect(result.records).toHaveLength(0);
+  });
+});
+
 describe('assessment workflow isolation', () => {
   it('keeps assessment webhook processing unaffected by queue endpoints', async () => {
     const result = await processAssessmentSubmission({
@@ -572,7 +816,7 @@ function fakeQueueDataSource(overrides = {}) {
         noteTargets: overrides.noteTargets ?? [],
         timelineActivities: overrides.timelineActivities ?? [],
         workspaceMembers: overrides.workspaceMembers ?? [],
-        warnings: []
+        warnings: overrides.warnings ?? []
       };
     }
   };
@@ -588,13 +832,13 @@ function queuePeople() {
       },
       jobTitle: 'Operations Director',
       company: {
-        name: 'Visible Gap Test Co'
+        name: 'Northstar Operations Co'
       },
       emails: {
-        primaryEmail: 'taylor@example.com'
+        primaryEmail: 'taylor@northstarops.com'
       },
       linkedinLink: {
-        primaryLinkUrl: 'https://www.linkedin.com/in/taylor-test'
+        primaryLinkUrl: 'https://www.linkedin.com/in/taylor-morgan'
       },
       outboundPipelineType: 'ASSESSMENT_CAMPAIGN',
       cadenceName: 'ASSESSMENT_CAMPAIGN_V1',
@@ -618,10 +862,10 @@ function queuePeople() {
         lastName: 'Lee'
       },
       company: {
-        name: 'Other Test Co'
+        name: 'Evergreen Process Co'
       },
       emails: {
-        primaryEmail: 'jordan@example.com'
+        primaryEmail: 'jordan@evergreenprocess.com'
       },
       outboundPipelineType: 'RELATIONSHIP_BUILDING',
       cadenceName: 'RELATIONSHIP_BUILDING_V1',
@@ -761,6 +1005,30 @@ function unassignedTask(id, overrides = {}) {
     dueAt: '2026-06-04',
     bodyV2: {
       markdown: 'No Person ID marker or unique lead name.'
+    },
+    ...overrides
+  };
+}
+
+function missingTaskPerson(id, overrides = {}) {
+  return {
+    id,
+    name: {
+      firstName: 'Parker',
+      lastName: 'Lane'
+    },
+    company: {
+      name: 'Northstar Operations Co'
+    },
+    emails: {
+      primaryEmail: 'parker@northstarops.com'
+    },
+    cadenceName: 'RELATIONSHIP_BUILDING_V1',
+    cadenceStage: 'CONNECTION_REQUEST',
+    latestTouchStatus: 'DRAFTED',
+    latestTouchChannel: 'LINKEDIN',
+    owner: {
+      userEmail: 'rep@visiblegap.com'
     },
     ...overrides
   };
