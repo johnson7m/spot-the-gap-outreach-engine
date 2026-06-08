@@ -13,6 +13,7 @@ import {
 import { detectTestRecord } from '../../utils/testRecordDetection.js';
 
 const OPEN_TASK_STATUSES = new Set(['TODO', 'OPEN', 'IN_PROGRESS', 'NOT_STARTED']);
+const INITIAL_CADENCE_STAGES = new Set(['NOT_STARTED', 'CONNECTION_REQUEST']);
 const TERMINAL_OR_EXCLUDED_STATES = new Set([
   'PAUSED',
   'COMPLETED',
@@ -24,35 +25,50 @@ const TERMINAL_OR_EXCLUDED_STATES = new Set([
   'DISQUALIFIED',
   'DISQUALIFIED_NURTURE'
 ]);
-const ACTIVE_TOUCH_STATUSES = new Set([
-  'DRAFTED',
-  'SENT',
-  'NO_RESPONSE',
-  'RESPONDED',
-  'FOLLOW_UP_NEEDED'
+const POST_INITIAL_CADENCE_STAGES = new Set([
+  'INTRO_MESSAGE',
+  'VALUE_TOUCH',
+  'ASSESSMENT_POSITIONING',
+  'ASSESSMENT_SENT',
+  'ASSESSMENT_CHECK_IN',
+  'STRATEGIC_CHECK_IN',
+  'DISCOVERY_ASK'
 ]);
-const INITIAL_CADENCE_STAGES = new Set(['NOT_STARTED', 'CONNECTION_REQUEST']);
+const INITIAL_TASK_PATTERNS = [
+  /send relationship-oriented connection request/i,
+  /send assessment-oriented connection request/i,
+  /\bconnection request\b/i,
+  /\bfirst cadence task\b/i
+];
+const POST_INITIAL_TASK_PATTERNS = [
+  /send contextual introduction/i,
+  /send assessment positioning message/i,
+  /send value touch/i,
+  /send spot the gap assessment link/i,
+  /check in on spot the gap assessment/i,
+  /send strategic check-in/i,
+  /evaluate discovery ask/i,
+  /\bli\s*-\s*day\s*2\b/i,
+  /\bli\s*-\s*f\/?u\b/i,
+  /\bfinal touch\b/i
+];
 
-const TASK_RULES = {
+const FOLLOW_UP_RULES = {
   ASSESSMENT_CAMPAIGN_V1: {
-    NOT_STARTED: taskRule('Send assessment-oriented connection request', 'connection_request', 1),
-    CONNECTION_REQUEST: taskRule('Send assessment-oriented connection request', 'connection_request', 1),
-    INTRO_MESSAGE: taskRule('Send assessment positioning message', 'assessment_positioning', 1),
-    ASSESSMENT_POSITIONING: taskRule('Send assessment positioning message', 'assessment_positioning', 1),
-    ASSESSMENT_SENT: taskRule('Send Spot the Gap assessment link', 'assessment_link', 1),
-    ASSESSMENT_CHECK_IN: taskRule('Check in on Spot the Gap assessment', 'assessment_check_in', 3)
+    nextCadenceStage: 'ASSESSMENT_POSITIONING',
+    taskTitle: 'Send assessment positioning message',
+    taskType: 'assessment_positioning',
+    dueInDays: 1
   },
   RELATIONSHIP_BUILDING_V1: {
-    NOT_STARTED: taskRule('Send relationship-oriented connection request', 'connection_request', 1),
-    CONNECTION_REQUEST: taskRule('Send relationship-oriented connection request', 'connection_request', 1),
-    INTRO_MESSAGE: taskRule('Send contextual introduction', 'introduction', 2),
-    VALUE_TOUCH: taskRule('Send value touch', 'value_touch', 14),
-    STRATEGIC_CHECK_IN: taskRule('Send strategic check-in', 'strategic_check_in', 30),
-    DISCOVERY_ASK: taskRule('Evaluate discovery ask', 'discovery_ask', 60)
+    nextCadenceStage: 'INTRO_MESSAGE',
+    taskTitle: 'Send contextual introduction',
+    taskType: 'introduction',
+    dueInDays: 2
   }
 };
 
-export async function planMissingNextTasks({
+export async function planSentInitialFollowUps({
   config = {},
   dataSource,
   log,
@@ -76,7 +92,7 @@ export async function planMissingNextTasks({
       : await source.listQueueRecords({
           limit: pageSize
         });
-  const plans = buildMissingNextTaskPlans(records, {
+  const plans = buildSentInitialFollowUpPlans(records, {
     includeTestRecords,
     now
   });
@@ -88,12 +104,15 @@ export async function planMissingNextTasks({
     includeTestRecords,
     pagination: records.pagination ?? null,
     warnings: records.warnings ?? [],
-    summary: summarizeMissingNextTaskPlans(plans),
+    summary: summarizeSentInitialFollowUpPlans(plans),
     plans: plans.records
   };
 }
 
-export function buildMissingNextTaskPlans(records = {}, { includeTestRecords = false, now = new Date() } = {}) {
+export function buildSentInitialFollowUpPlans(
+  records = {},
+  { includeTestRecords = false, now = new Date() } = {}
+) {
   const workspaceMembersById = createWorkspaceMemberIndex(records.workspaceMembers ?? []);
   const taskTargetsByTaskId = groupBy(records.taskTargets ?? [], (target) => target.taskId);
   const openTasksByPersonId = buildOpenTasksByPersonId({
@@ -106,14 +125,14 @@ export function buildMissingNextTaskPlans(records = {}, { includeTestRecords = f
   let hiddenTestRecords = 0;
 
   for (const person of records.people ?? []) {
-    const normalized = normalizePersonForTaskPlan(person, workspaceMembersById);
+    const normalized = normalizePersonForSentFollowUpPlan(person, workspaceMembersById);
 
     if (normalized.isTestRecord && !includeTestRecords) {
       hiddenTestRecords += 1;
       continue;
     }
 
-    const plan = buildMissingNextTaskPlanRecord({
+    const plan = buildSentInitialFollowUpPlanRecord({
       person: normalized,
       openTasks: openTasksByPersonId.get(normalized.personId) ?? [],
       now
@@ -130,48 +149,47 @@ export function buildMissingNextTaskPlans(records = {}, { includeTestRecords = f
   };
 }
 
-export function buildMissingNextTaskPlanRecord({ person, openTasks = [], now = new Date() } = {}) {
-  if (!person?.personId || !person.cadenceName || isTerminalOrExcluded(person.cadenceStage)) {
+export function buildSentInitialFollowUpPlanRecord({
+  person,
+  openTasks = [],
+  now = new Date()
+} = {}) {
+  if (!person?.personId || isExcludedPersonState(person)) {
     return null;
   }
 
-  if (isExcludedPersonState(person)) {
+  if (person.latestTouchStatus !== 'SENT' || !INITIAL_CADENCE_STAGES.has(person.cadenceStage)) {
     return null;
   }
 
-  if (!ACTIVE_TOUCH_STATUSES.has(person.latestTouchStatus)) {
+  if (openTasks.some(isPostInitialFollowUpTask)) {
     return null;
   }
 
-  if (person.latestTouchStatus === 'SENT' && INITIAL_CADENCE_STAGES.has(person.cadenceStage)) {
+  const rule = getFollowUpRule(person);
+
+  if (!rule) {
     return null;
   }
 
-  if (openTasks.length > 0) {
-    return null;
-  }
-
-  const taskRuleForStage = getTaskRule(person);
-
-  if (!taskRuleForStage) {
-    return null;
-  }
-
+  const currentInitialTask = openTasks.find(isInitialOutreachTask) ?? null;
   const warnings = [];
   const evidence = [
     `cadenceName=${person.cadenceName}`,
     `cadenceStage=${person.cadenceStage}`,
-    `latestTouchStatus=${person.latestTouchStatus}`,
-    'No open task resolved through taskTargets or Person markers.'
+    'latestTouchStatus=SENT',
+    'No open post-initial follow-up task resolved through taskTargets or Person markers.'
   ];
-  const originalNextOutboundTouchDate = person.nextOutboundTouchDate ?? null;
   const rawRecommendedDueDate =
-    originalNextOutboundTouchDate ||
-    addDaysToDateOnly(toProjectDateOnly(now), taskRuleForStage.dueInDays);
+    person.nextOutboundTouchDate || addDaysToDateOnly(toProjectDateOnly(now), rule.dueInDays);
   const dueDate = resolveSafeMissingNextTaskDueDate({
     recommendedDueDate: rawRecommendedDueDate,
     now
   });
+
+  if (currentInitialTask) {
+    evidence.push(`currentInitialTaskId=${currentInitialTask.taskId}`);
+  }
 
   if (!person.owner?.email && !person.owner?.id) {
     warnings.push('Owner could not be resolved; task assignment may need manual review.');
@@ -185,25 +203,24 @@ export function buildMissingNextTaskPlanRecord({ person, openTasks = [], now = n
     evidence.push(`recommendedDueDate adjusted from ${rawRecommendedDueDate ?? 'missing'} to ${dueDate.recommendedDueDate}`);
   }
 
-  const safeToCreate = Boolean(taskRuleForStage && !person.isTestRecord && (person.owner?.email || person.owner?.id));
+  const safeToCreate = Boolean(rule && !person.isTestRecord && (person.owner?.email || person.owner?.id));
 
   return {
     personId: person.personId,
     personName: person.name,
-    companyId: person.companyId,
     owner: person.owner,
     cadenceName: person.cadenceName,
     cadenceStage: person.cadenceStage,
-    latestTouchChannel: person.latestTouchChannel,
     latestTouchStatus: person.latestTouchStatus,
-    nextOutboundTouchDate: person.nextOutboundTouchDate,
-    originalNextOutboundTouchDate,
-    recommendedTaskTitle: taskRuleForStage.title,
+    latestTouchChannel: person.latestTouchChannel,
+    currentInitialTaskId: currentInitialTask?.taskId ?? null,
+    recommendedNextCadenceStage: rule.nextCadenceStage,
+    recommendedTaskTitle: rule.taskTitle,
     recommendedDueDate: dueDate.recommendedDueDate,
     originalRecommendedDueDate: dueDate.originalRecommendedDueDate,
     dueDateAdjusted: dueDate.dueDateAdjusted,
     dueDateAdjustmentReason: dueDate.dueDateAdjustmentReason,
-    recommendedTaskType: taskRuleForStage.taskType,
+    recommendedTaskType: rule.taskType,
     confidence: safeToCreate ? 'high' : 'medium',
     evidence,
     safeToCreate,
@@ -237,8 +254,17 @@ function buildOpenTasksByPersonId({ tasks = [], taskTargetsByTaskId, people = []
     const key = String(personLink.personId);
     const existing = map.get(key) ?? [];
     existing.push({
-      taskId: task.id,
-      title: task.title ?? task.name ?? task.subject ?? null,
+      taskId: stringify(task.id),
+      title: firstString(task.title, task.name, task.subject),
+      status: normalizeSelect(task.status),
+      body,
+      cadenceStage: normalizeSelect(
+        readMarkdownValue(body, 'Next cadence stage') ??
+          readMarkdownValue(body, 'Cadence stage') ??
+          readMarkdownValue(body, 'Previous cadence stage')
+      ),
+      taskType: normalizeSelect(readMarkdownValue(body, 'Task type')),
+      latestTouchStatus: normalizeSelect(readMarkdownValue(body, 'Latest touch status')),
       source: personLink.source,
       confidence: personLink.confidence
     });
@@ -248,15 +274,15 @@ function buildOpenTasksByPersonId({ tasks = [], taskTargetsByTaskId, people = []
   return map;
 }
 
-function normalizePersonForTaskPlan(person = {}, workspaceMembersById) {
+function normalizePersonForSentFollowUpPlan(person = {}, workspaceMembersById) {
   const testRecord = detectTestRecord(person);
 
   return {
     raw: person,
     personId: stringify(person.id),
     name: getPersonName(person),
-    companyId: firstString(person.companyId, person.company?.id, person.companyID),
     owner: normalizeOwner(person, 'person', workspaceMembersById),
+    outboundPipelineType: normalizeSelect(person.outboundPipelineType),
     cadenceName: normalizeSelect(person.cadenceName),
     cadenceStage: normalizeSelect(person.cadenceStage),
     latestTouchChannel: normalizeSelect(person.latestTouchChannel),
@@ -269,28 +295,33 @@ function normalizePersonForTaskPlan(person = {}, workspaceMembersById) {
   };
 }
 
-function summarizeMissingNextTaskPlans(planResult = {}) {
+function summarizeSentInitialFollowUpPlans(planResult = {}) {
   const records = planResult.records ?? [];
 
   return {
-    missingNextTaskCount: records.length,
+    sentInitialFollowUpCount: records.length,
     safeToCreate: records.filter((record) => record.safeToCreate).length,
     requiresReview: records.filter((record) => !record.safeToCreate).length,
     hiddenTestRecords: planResult.hiddenTestRecords ?? 0,
     includedTestRecords: records.filter((record) => record.isTestRecord).length,
     dueDatesAdjusted: records.filter((record) => record.dueDateAdjusted).length,
-    byDueDateAdjustmentReason: countBy(
-      records.filter((record) => record.dueDateAdjusted),
-      (record) => record.dueDateAdjustmentReason
-    ),
     byCadenceName: countBy(records, (record) => record.cadenceName),
     byCadenceStage: countBy(records, (record) => record.cadenceStage),
+    byRecommendedNextCadenceStage: countBy(records, (record) => record.recommendedNextCadenceStage),
     byConfidence: countBy(records, (record) => record.confidence)
   };
 }
 
-function getTaskRule(person) {
-  return TASK_RULES[person.cadenceName]?.[person.cadenceStage] ?? null;
+function getFollowUpRule(person) {
+  if (person.cadenceName === 'ASSESSMENT_CAMPAIGN_V1' || person.outboundPipelineType === 'ASSESSMENT_CAMPAIGN') {
+    return FOLLOW_UP_RULES.ASSESSMENT_CAMPAIGN_V1;
+  }
+
+  if (person.cadenceName === 'RELATIONSHIP_BUILDING_V1' || person.outboundPipelineType === 'RELATIONSHIP_BUILDING') {
+    return FOLLOW_UP_RULES.RELATIONSHIP_BUILDING_V1;
+  }
+
+  return null;
 }
 
 function isExcludedPersonState(person) {
@@ -302,20 +333,38 @@ function isExcludedPersonState(person) {
   ].some((value) => TERMINAL_OR_EXCLUDED_STATES.has(normalizeSelect(value)));
 }
 
-function isTerminalOrExcluded(value) {
-  return TERMINAL_OR_EXCLUDED_STATES.has(normalizeSelect(value));
-}
-
-function taskRule(title, taskType, dueInDays) {
-  return {
-    title,
-    taskType,
-    dueInDays
-  };
-}
-
 function isOpenTask(task = {}) {
   return OPEN_TASK_STATUSES.has(normalizeSelect(task.status));
+}
+
+function isInitialOutreachTask(task = {}) {
+  const text = getTaskClassificationText(task);
+
+  return (
+    task.taskType === 'CONNECTION_REQUEST' ||
+    INITIAL_TASK_PATTERNS.some((pattern) => pattern.test(text))
+  );
+}
+
+function isPostInitialFollowUpTask(task = {}) {
+  const text = getTaskClassificationText(task);
+
+  return (
+    POST_INITIAL_CADENCE_STAGES.has(normalizeSelect(task.cadenceStage)) ||
+    POST_INITIAL_TASK_PATTERNS.some((pattern) => pattern.test(text))
+  );
+}
+
+function getTaskClassificationText(task = {}) {
+  return [
+    task.title,
+    task.taskType,
+    task.cadenceStage,
+    task.latestTouchStatus,
+    task.body
+  ]
+    .filter(Boolean)
+    .join(' ');
 }
 
 function getTaskBody(task = {}) {
@@ -335,6 +384,16 @@ function getPersonName(person = {}) {
     person.fullName,
     person.displayName
   );
+}
+
+function readMarkdownValue(body, label) {
+  if (!body) {
+    return null;
+  }
+
+  const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = body.match(new RegExp(`^${escapedLabel}:\\s*(.+)$`, 'im'));
+  return match?.[1]?.trim() ?? null;
 }
 
 function groupBy(records = [], getKey) {

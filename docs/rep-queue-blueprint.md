@@ -63,6 +63,8 @@ Inclusion logic:
 - If no open Task exists, keep the Person visible and add
   `suggestedResolutionActions=["create_next_task"]` with the warning
   `No open task exists yet; create the first cadence task.`
+- If `latestTouchStatus=SENT`, `RESPONDED`, or `COMPLETED`, exclude the Person
+  from Fresh Leads by default.
 - `queueClassification=fresh_initial_task`.
 
 Priority logic:
@@ -109,14 +111,18 @@ Inclusion logic:
 - legacy LinkedIn task titles like `LI - Day 2`, `LI - f/u accepted connect`,
   and `LI - final touch` can be included when they show outreach already
   started
-- `NOT_STARTED` initial connection/request Tasks stay in Fresh Leads and are
-  excluded from Follow-Ups by default
+- `DRAFTED` `NOT_STARTED` initial connection/request Tasks stay in Fresh Leads
+  and are excluded from Follow-Ups by default
+- `SENT` `NOT_STARTED` or `CONNECTION_REQUEST` records are treated as first
+  touch already sent. If no post-initial open Task exists, include them as
+  `queueClassification=follow_up_after_initial_sent` with
+  `suggestedResolutionActions=["create_follow_up_task"]`.
 - unresolved due tasks are hidden by default and counted in the response warning
   `N unassigned tasks hidden. Review Unassigned Tasks queue.`
 - `includeUnassigned=true` may be used for diagnostics, but the workspace should
   not show unresolved Tasks as "Unknown person" in the normal Follow-Up Queue
-- `queueClassification=follow_up_post_initial_touch` or
-  `follow_up_legacy_task_history`
+- `queueClassification=follow_up_post_initial_touch`,
+  `follow_up_legacy_task_history`, or `follow_up_after_initial_sent`
 
 Priority logic:
 
@@ -289,6 +295,9 @@ Inclusion logic:
   Leads when cadence is `NOT_STARTED` or `CONNECTION_REQUEST`; old inherited
   Person next-touch dates alone should not stale newly actionable first-touch
   work
+- `SENT` first-touch gaps are protected from Stale Recovery when the only stale
+  signal is an old `nextOutboundTouchDate`; they belong in Follow-Ups unless an
+  explicit stale flag applies
 
 Suggested thresholds:
 

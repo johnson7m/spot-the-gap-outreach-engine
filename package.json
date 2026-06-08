@@ -27,6 +27,7 @@
     "queues:inspect-task-relationships": "node scripts/inspectTaskRelationships.js",
     "queues:diagnose-classification": "node scripts/diagnoseQueueClassification.js",
     "queues:plan-missing-next-tasks": "node scripts/planMissingNextTasks.js",
+    "queues:plan-sent-initial-follow-ups": "node scripts/planSentInitialFollowUps.js",
     "queues:apply-missing-next-tasks": "node scripts/applyMissingNextTasks.js",
     "legacy:tasks:apply": "node scripts/applyLegacyTaskRetrofit.js",
     "legacy:owners:plan": "node scripts/planLegacyOwnerCleanup.js",

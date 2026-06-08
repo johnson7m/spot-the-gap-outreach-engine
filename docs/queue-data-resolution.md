@@ -183,6 +183,8 @@ Fresh Leads:
 - initial connection/request Task remains in Fresh Leads when open
 - no open Task keeps the item visible with `create_next_task` as a suggested
   resolution action
+- `latestTouchStatus=SENT`, `RESPONDED`, or `COMPLETED` is excluded from Fresh
+  Leads by default; a `SENT` initial touch is handled as a follow-up gap
 - `queueClassification=fresh_initial_task`
 
 Follow-Ups:
@@ -196,13 +198,19 @@ Follow-Ups:
 - legacy follow-up titles such as `LI - Day 2`, `LI - f/u accepted connect`,
   or `LI - final touch` can be included even when Person cadence fields are
   stale
-- NOT_STARTED initial connection/request Tasks are excluded by default and stay
-  in Fresh Leads
+- `DRAFTED` NOT_STARTED initial connection/request Tasks are excluded by
+  default and stay in Fresh Leads
+- `SENT` NOT_STARTED or CONNECTION_REQUEST records are treated as first touch
+  already sent. If no post-initial open Task exists, Follow-Ups returns
+  `queueClassification=follow_up_after_initial_sent`,
+  `suggestedResolutionActions=["create_follow_up_task"]`, and the warning
+  `Initial touch appears sent, but no follow-up task exists.`
 - unresolved due tasks are excluded by default and counted in a warning:
   `N unassigned tasks hidden. Review Unassigned Tasks queue.`
 - `includeUnassigned=true` can include unresolved tasks for diagnostics.
 - `queueClassification` is `follow_up_post_initial_touch` or
-  `follow_up_legacy_task_history`
+  `follow_up_legacy_task_history`; first-touch sent gaps use
+  `follow_up_after_initial_sent`
 
 Unassigned Tasks:
 
@@ -228,6 +236,10 @@ Stale Recovery:
   stay in Fresh Leads when cadence is `NOT_STARTED` or `CONNECTION_REQUEST`;
   an old inherited Person `nextOutboundTouchDate` alone should not make those
   newly actionable initial Tasks stale
+- exception: first-touch records with `latestTouchStatus=SENT` and no
+  post-initial follow-up Task are protected from Stale Recovery when the only
+  stale signal is an old `nextOutboundTouchDate`; they belong in Follow-Ups as
+  `create_follow_up_task` gaps
 
 Pipeline Review:
 
@@ -253,6 +265,10 @@ When `includeDiagnostics=true`, queue items also include
 - `finalQueue`
 - `excludedQueues`
 - `classificationReasons`
+- `initialTaskDetected`
+- `firstTouchAlreadySent`
+- `followUpTaskDetected`
+- `recommendedFix`
 
 Default precedence for diagnostics is:
 
@@ -324,11 +340,32 @@ It finds People with active, non-terminal cadence state and no open Task
 resolved through taskTargets or Person markers. Test records are hidden by
 default; set `INCLUDE_TEST_RECORDS=true` for diagnostics.
 
+The missing next-task planner skips initial-stage People where
+`latestTouchStatus=SENT`; those records are handled by the sent initial
+follow-up planner so the engine does not recommend another connection request.
+
 For safe first-touch rows, the planner preserves
 `originalNextOutboundTouchDate` and `originalRecommendedDueDate`. If the chosen
 due date is missing, already past, or same-day after the project business
 cutoff, it writes a current-or-next-business-day `recommendedDueDate`,
 `dueDateAdjusted=true`, and a `dueDateAdjustmentReason`.
+
+Plan sent initial-touch follow-up gaps without writing:
+
+```bash
+npm run queues:plan-sent-initial-follow-ups
+```
+
+The planner writes:
+
+- `data/sent-initial-follow-up-plan.json`
+- `data/sent-initial-follow-up-summary.md`
+
+It finds People where `latestTouchStatus=SENT`,
+`cadenceStage=NOT_STARTED` or `CONNECTION_REQUEST`, and no post-initial open
+follow-up Task exists. Relationship-building records are recommended for
+`INTRO_MESSAGE`; assessment-campaign records are recommended for
+`ASSESSMENT_POSITIONING`.
 
 Guarded apply path:
 

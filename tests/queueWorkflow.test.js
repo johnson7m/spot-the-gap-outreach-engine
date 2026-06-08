@@ -6,9 +6,11 @@ import {
   createTwentyQueueDataSource
 } from '../src/integrations/twenty/queueDataSource.js';
 import { handleQueueFetch } from '../src/routes/api/queueRoutes.js';
+import { buildQueueClassificationDiagnostics } from '../src/services/queueService.js';
 import { processAssessmentSubmission } from '../src/workflows/assessmentWorkflow.js';
 import { getOutboundQueueWorkflow } from '../src/workflows/outbound/getQueueWorkflow.js';
 import { buildMissingNextTaskPlans } from '../src/workflows/outbound/missingNextTaskPlanner.js';
+import { buildSentInitialFollowUpPlans } from '../src/workflows/outbound/sentInitialFollowUpPlanner.js';
 
 const baseConfig = {
   env: 'test',
@@ -195,6 +197,55 @@ describe('outbound queue workflow', () => {
       queueClassification: 'fresh_initial_task'
     });
     expect(stale.items.map((item) => item.personId)).not.toContain('people-generated-initial');
+  });
+
+  it('does not route SENT initial-touch gaps to Stale Recovery solely because next-touch is old', async () => {
+    const people = [
+      queueLead('people-sent-initial-old-date', {
+        cadenceName: 'RELATIONSHIP_BUILDING_V1',
+        cadenceStage: 'NOT_STARTED',
+        latestTouchStatus: 'SENT',
+        nextOutboundTouchDate: '2026-06-01'
+      })
+    ];
+    const tasks = [
+      queueTask('tasks-sent-initial-old-date', {
+        personId: 'people-sent-initial-old-date',
+        title: 'Send relationship-oriented connection request',
+        bodyV2: {
+          markdown: [
+            'Person ID: people-sent-initial-old-date',
+            'Cadence: RELATIONSHIP_BUILDING_V1',
+            'Cadence stage: NOT_STARTED',
+            'Task type: connection_request'
+          ].join('\n')
+        }
+      })
+    ];
+    const stale = await getOutboundQueueWorkflow({
+      queueSlug: 'stale-recovery',
+      query: {
+        ownerScope: 'all'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({ people, tasks }),
+      now: new Date('2026-06-06T15:00:00.000Z')
+    });
+    const followUps = await getOutboundQueueWorkflow({
+      queueSlug: 'follow-ups',
+      query: {
+        ownerScope: 'all',
+        dueBefore: '2026-06-08'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({ people, tasks }),
+      now: new Date('2026-06-06T15:00:00.000Z')
+    });
+
+    expect(stale.items.map((item) => item.personId)).not.toContain('people-sent-initial-old-date');
+    expect(followUps.items.map((item) => item.personId)).toEqual(['people-sent-initial-old-date']);
   });
 
   it('still routes genuinely stale post-initial records to Stale Recovery', async () => {
@@ -424,6 +475,149 @@ describe('outbound queue workflow', () => {
     expect(followUps.items).toHaveLength(0);
   });
 
+  it('excludes SENT initial connection requests from Fresh Leads and surfaces a follow-up gap', async () => {
+    const people = [
+      queueLead('people-sent-initial', {
+        cadenceName: 'RELATIONSHIP_BUILDING_V1',
+        cadenceStage: 'NOT_STARTED',
+        latestTouchStatus: 'SENT'
+      })
+    ];
+    const tasks = [
+      queueTask('tasks-sent-initial', {
+        personId: 'people-sent-initial',
+        title: 'Send relationship-oriented connection request',
+        bodyV2: {
+          markdown: [
+            'Person ID: people-sent-initial',
+            'Cadence: RELATIONSHIP_BUILDING_V1',
+            'Cadence stage: NOT_STARTED',
+            'Task type: connection_request'
+          ].join('\n')
+        }
+      })
+    ];
+    const fresh = await getOutboundQueueWorkflow({
+      queueSlug: 'fresh-leads',
+      query: {
+        ownerScope: 'all'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({ people, tasks }),
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+    const followUps = await getOutboundQueueWorkflow({
+      queueSlug: 'follow-ups',
+      query: {
+        ownerScope: 'all',
+        dueBefore: '2026-06-04'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({ people, tasks }),
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+
+    expect(fresh.items).toHaveLength(0);
+    expect(followUps.items).toHaveLength(1);
+    expect(followUps.items[0]).toMatchObject({
+      personId: 'people-sent-initial',
+      taskId: 'tasks-sent-initial',
+      queueClassification: 'follow_up_after_initial_sent',
+      suggestedResolutionActions: ['create_follow_up_task'],
+      queueClassificationReasons: expect.arrayContaining([
+        'latest_touch_sent',
+        'initial_touch_already_sent',
+        'needs_next_follow_up_task'
+      ])
+    });
+    expect(followUps.items[0].warnings).toContain(
+      'Initial touch appears sent, but no follow-up task exists.'
+    );
+  });
+
+  it('shows SENT initial-touch People with no follow-up task as a create-follow-up gap', async () => {
+    const people = [
+      queueLead('people-sent-no-task', {
+        cadenceName: 'ASSESSMENT_CAMPAIGN_V1',
+        cadenceStage: 'CONNECTION_REQUEST',
+        latestTouchStatus: 'SENT',
+        outboundPipelineType: 'ASSESSMENT_CAMPAIGN'
+      })
+    ];
+    const result = await getOutboundQueueWorkflow({
+      queueSlug: 'follow-ups',
+      query: {
+        ownerScope: 'all'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({ people, tasks: [] }),
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]).toMatchObject({
+      personId: 'people-sent-no-task',
+      taskId: null,
+      queueClassification: 'follow_up_after_initial_sent',
+      suggestedResolutionActions: ['create_follow_up_task'],
+      queueClassificationReasons: expect.arrayContaining([
+        'latest_touch_sent',
+        'initial_touch_already_sent',
+        'needs_next_follow_up_task'
+      ])
+    });
+  });
+
+  it('routes SENT initial-touch People with open post-initial tasks to Follow-Ups', async () => {
+    const people = [
+      queueLead('people-sent-follow-up-task', {
+        cadenceName: 'RELATIONSHIP_BUILDING_V1',
+        cadenceStage: 'NOT_STARTED',
+        latestTouchStatus: 'SENT'
+      })
+    ];
+    const tasks = [
+      queueTask('tasks-sent-follow-up', {
+        personId: 'people-sent-follow-up-task',
+        title: 'Send contextual introduction',
+        bodyV2: {
+          markdown: [
+            'Person ID: people-sent-follow-up-task',
+            'Cadence: RELATIONSHIP_BUILDING_V1',
+            'Next cadence stage: INTRO_MESSAGE',
+            'Latest touch status: SENT'
+          ].join('\n')
+        }
+      })
+    ];
+    const result = await getOutboundQueueWorkflow({
+      queueSlug: 'follow-ups',
+      query: {
+        ownerScope: 'all',
+        dueBefore: '2026-06-04'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({ people, tasks }),
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]).toMatchObject({
+      personId: 'people-sent-follow-up-task',
+      taskId: 'tasks-sent-follow-up',
+      queueClassification: 'follow_up_after_initial_sent',
+      queueClassificationReasons: expect.arrayContaining([
+        'latest_touch_sent',
+        'initial_touch_already_sent',
+        'open_follow_up_task'
+      ])
+    });
+  });
+
   it('puts INTRO_MESSAGE open tasks in Follow-Ups', async () => {
     const people = [
       queueLead('people-intro', {
@@ -633,6 +827,43 @@ describe('outbound queue workflow', () => {
           classificationReasons: ['excluded_initial_outreach_fresh_lead']
         })
       ]
+    });
+  });
+
+  it('adds sent-initial follow-up diagnostics and recommended fixes', () => {
+    const report = buildQueueClassificationDiagnostics({
+      people: [
+        queueLead('people-diagnostic-sent-initial', {
+          cadenceStage: 'CONNECTION_REQUEST',
+          latestTouchStatus: 'SENT'
+        })
+      ],
+      tasks: [
+        queueTask('tasks-diagnostic-sent-initial', {
+          personId: 'people-diagnostic-sent-initial',
+          title: 'Send relationship-oriented connection request',
+          bodyV2: {
+            markdown: [
+              'Person ID: people-diagnostic-sent-initial',
+              'Cadence: RELATIONSHIP_BUILDING_V1',
+              'Cadence stage: CONNECTION_REQUEST',
+              'Task type: connection_request'
+            ].join('\n')
+          }
+        })
+      ],
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+
+    expect(report.items[0]).toMatchObject({
+      personId: 'people-diagnostic-sent-initial',
+      latestTouchStatus: 'SENT',
+      initialTaskDetected: true,
+      firstTouchAlreadySent: true,
+      followUpTaskDetected: false,
+      recommendedFix: 'create_follow_up_task',
+      matchedQueues: ['follow-ups', 'pipeline-review'],
+      finalQueue: 'follow-ups'
     });
   });
 
@@ -1297,6 +1528,27 @@ describe('missing next-task planner', () => {
     });
   });
 
+  it('skips SENT initial-touch People so connection requests are not duplicated', () => {
+    const result = buildMissingNextTaskPlans(
+      {
+        people: [
+          missingTaskPerson('people-sent-initial-missing-task', {
+            cadenceName: 'RELATIONSHIP_BUILDING_V1',
+            cadenceStage: 'CONNECTION_REQUEST',
+            latestTouchStatus: 'SENT'
+          })
+        ],
+        tasks: [],
+        taskTargets: []
+      },
+      {
+        now: new Date('2026-06-03T15:00:00.000Z')
+      }
+    );
+
+    expect(result.records).toHaveLength(0);
+  });
+
   it('adjusts past recommended due dates and preserves the original outbound date', () => {
     const result = buildMissingNextTaskPlans(
       {
@@ -1420,6 +1672,113 @@ describe('missing next-task planner', () => {
           targetPersonId: 'people-has-task'
         }
       ]
+    });
+
+    expect(result.records).toHaveLength(0);
+  });
+});
+
+describe('sent initial follow-up planner', () => {
+  it('finds SENT relationship initial-touch records and recommends INTRO_MESSAGE', () => {
+    const result = buildSentInitialFollowUpPlans(
+      {
+        people: [
+          missingTaskPerson('people-relationship-sent', {
+            cadenceName: 'RELATIONSHIP_BUILDING_V1',
+            cadenceStage: 'CONNECTION_REQUEST',
+            latestTouchStatus: 'SENT',
+            nextOutboundTouchDate: '2026-06-04'
+          })
+        ],
+        tasks: [
+          {
+            id: 'tasks-relationship-initial',
+            status: 'TODO',
+            title: 'Send relationship-oriented connection request',
+            personId: 'people-relationship-sent',
+            bodyV2: {
+              markdown: [
+                'Person ID: people-relationship-sent',
+                'Cadence: RELATIONSHIP_BUILDING_V1',
+                'Cadence stage: CONNECTION_REQUEST',
+                'Task type: connection_request'
+              ].join('\n')
+            }
+          }
+        ],
+        taskTargets: []
+      },
+      {
+        now: new Date('2026-06-03T15:00:00.000Z')
+      }
+    );
+
+    expect(result.records).toHaveLength(1);
+    expect(result.records[0]).toMatchObject({
+      personId: 'people-relationship-sent',
+      currentInitialTaskId: 'tasks-relationship-initial',
+      recommendedNextCadenceStage: 'INTRO_MESSAGE',
+      recommendedTaskTitle: 'Send contextual introduction',
+      recommendedTaskType: 'introduction',
+      safeToCreate: true
+    });
+  });
+
+  it('finds SENT assessment initial-touch records and recommends ASSESSMENT_POSITIONING', () => {
+    const result = buildSentInitialFollowUpPlans(
+      {
+        people: [
+          missingTaskPerson('people-assessment-sent', {
+            outboundPipelineType: 'ASSESSMENT_CAMPAIGN',
+            cadenceName: 'ASSESSMENT_CAMPAIGN_V1',
+            cadenceStage: 'NOT_STARTED',
+            latestTouchStatus: 'SENT'
+          })
+        ],
+        tasks: [],
+        taskTargets: []
+      },
+      {
+        now: new Date('2026-06-03T15:00:00.000Z')
+      }
+    );
+
+    expect(result.records).toHaveLength(1);
+    expect(result.records[0]).toMatchObject({
+      personId: 'people-assessment-sent',
+      currentInitialTaskId: null,
+      recommendedNextCadenceStage: 'ASSESSMENT_POSITIONING',
+      recommendedTaskTitle: 'Send assessment positioning message',
+      recommendedTaskType: 'assessment_positioning',
+      safeToCreate: true
+    });
+  });
+
+  it('does not plan when a post-initial follow-up task already exists', () => {
+    const result = buildSentInitialFollowUpPlans({
+      people: [
+        missingTaskPerson('people-sent-with-follow-up', {
+          cadenceName: 'RELATIONSHIP_BUILDING_V1',
+          cadenceStage: 'NOT_STARTED',
+          latestTouchStatus: 'SENT'
+        })
+      ],
+      tasks: [
+        {
+          id: 'tasks-existing-follow-up',
+          status: 'TODO',
+          title: 'Send contextual introduction',
+          personId: 'people-sent-with-follow-up',
+          bodyV2: {
+            markdown: [
+              'Person ID: people-sent-with-follow-up',
+              'Cadence: RELATIONSHIP_BUILDING_V1',
+              'Next cadence stage: INTRO_MESSAGE'
+            ].join('\n')
+          }
+        }
+      ],
+      taskTargets: []
     });
 
     expect(result.records).toHaveLength(0);
