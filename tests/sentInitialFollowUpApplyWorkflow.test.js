@@ -1,3 +1,6 @@
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import sampleAssessment from '../data/sample-netlify-assessment-submission.json' with { type: 'json' };
 import { processAssessmentSubmission } from '../src/workflows/assessmentWorkflow.js';
@@ -8,6 +11,12 @@ import {
   buildSentInitialFollowUpTaskPayload,
   selectSentInitialFollowUpCandidates
 } from '../src/workflows/outbound/applySentInitialFollowUpsWorkflow.js';
+import {
+  buildSentInitialFollowUpApplyOutput,
+  buildSentInitialFollowUpApplyOutputFromLogs,
+  loadSentInitialFollowUpApplyOutput,
+  writeSentInitialFollowUpOutputFile
+} from '../src/workflows/outbound/sentInitialFollowUpApplyOutput.js';
 
 const silentLog = {
   info() {},
@@ -563,6 +572,239 @@ describe('sent initial follow-up apply workflow', () => {
         }
       }
     ]);
+  });
+
+  it.each(['succeeded', 'partial_success', 'failed'])(
+    'writes %s apply output with summary, operations, audit IDs, timestamp, and correlation ID',
+    async (status) => {
+      const tempDir = await mkdtemp(join(tmpdir(), 'sent-initial-output-'));
+      const outputPath = join(tempDir, 'nested', 'apply-latest.json');
+      const failed = status === 'failed';
+      const output = buildSentInitialFollowUpApplyOutput({
+        result: {
+          status,
+          dryRun: false,
+          liveEnabled: true,
+          guard: {},
+          summary: {
+            attempted: 1,
+            succeeded: failed ? 0 : 1,
+            failed: failed ? 1 : 0,
+            verificationFailed: 0,
+            skipped: 0,
+            auditIds: ['audit-output-1'],
+            outboundEventIds: ['event-output-1']
+          },
+          retryAfterSeconds: failed ? 60 : null,
+          recommendedNextCommand: 'npm run queues:recover-sent-initial-follow-ups',
+          warnings: [],
+          operations: [
+            {
+              correlationId: 'operation-correlation-1',
+              personId: 'person-safe-1',
+              status: failed ? 'failed' : 'verification_succeeded',
+              audit: {
+                id: 'audit-output-1'
+              },
+              outboundEvent: {
+                id: 'event-output-1'
+              }
+            }
+          ]
+        },
+        generatedAt: new Date('2026-06-08T18:00:00.000Z'),
+        correlationId: 'batch-correlation-1'
+      });
+
+      try {
+        await writeSentInitialFollowUpOutputFile(outputPath, output);
+        const written = JSON.parse(await readFile(outputPath, 'utf8'));
+
+        expect(written).toMatchObject({
+          status,
+          timestamp: '2026-06-08T18:00:00.000Z',
+          correlationId: 'batch-correlation-1',
+          operationCorrelationIds: ['operation-correlation-1'],
+          summary: {
+            auditIds: ['audit-output-1'],
+            outboundEventIds: ['event-output-1']
+          },
+          operations: [
+            {
+              personId: 'person-safe-1',
+              auditId: 'audit-output-1',
+              outboundEventId: 'event-output-1'
+            }
+          ]
+        });
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    }
+  );
+
+  it('handles a missing apply output file with an actionable recovery response', async () => {
+    const loaded = await loadSentInitialFollowUpApplyOutput({
+      applyOutputPath: '/tmp/visible-gap-missing-sent-initial-output.json',
+      config: {
+        supabase: {
+          enabled: false
+        }
+      },
+      fallbackLoader: async () => null,
+      now: new Date('2026-06-08T18:00:00.000Z')
+    });
+
+    expect(loaded).toMatchObject({
+      source: 'missing',
+      missingFile: true,
+      output: {
+        ok: false,
+        status: 'missing_apply_output',
+        operations: [],
+        recommendedNextCommand:
+          'Re-run the apply command in dry-run mode or inspect Supabase crm_sync_logs for action=sent_initial_follow_up_create before recovery.'
+      }
+    });
+    expect(loaded.warnings[0]).toContain('Apply output file was not found');
+  });
+
+  it('reconstructs recovery input from Supabase-style CRM and outbound logs', async () => {
+    const fallbackOutput = buildSentInitialFollowUpApplyOutputFromLogs({
+      crmSyncLogs: [
+        {
+          id: 'audit-fallback-1',
+          correlation_id: 'sent-initial-follow-up:person-safe-1:abc',
+          action: 'sent_initial_follow_up_create',
+          dedupe_key:
+            'outbound-cadence:person:person-safe-1:cadence:RELATIONSHIP_BUILDING_V1:stage:INTRO_MESSAGE:task:introduction',
+          status: 'failed',
+          request_payload: {
+            taskPayload: {
+              title: 'Send relationship follow-up / intro message',
+              dueAt: '2026-06-08'
+            },
+            personTarget: {
+              targetPersonId: 'person-safe-1'
+            }
+          },
+          error_payload: {
+            message: 'Limit reached',
+            retryAfterSeconds: 60
+          },
+          created_at: '2026-06-08T18:00:00.000Z'
+        }
+      ],
+      outboundEvents: [
+        {
+          id: 'event-fallback-1',
+          correlation_id: 'sent-initial-follow-up:person-safe-1:abc',
+          event_type: 'sent_initial_follow_up_created',
+          status: 'failed',
+          payload: {
+            personId: 'person-safe-1',
+            personName: 'Lead person-safe-1',
+            cadenceName: 'RELATIONSHIP_BUILDING_V1',
+            oldCadenceStage: 'NOT_STARTED',
+            recommendedNextCadenceStage: 'INTRO_MESSAGE',
+            latestTouchStatus: 'SENT',
+            currentInitialTaskId: 'task-initial-existing',
+            recommendedTaskTitle: 'Send relationship follow-up / intro message',
+            recommendedDueDate: '2026-06-08',
+            recommendedTaskType: 'introduction'
+          }
+        }
+      ],
+      generatedAt: new Date('2026-06-08T18:00:00.000Z'),
+      correlationId: 'fallback-source-1'
+    });
+    const loaded = await loadSentInitialFollowUpApplyOutput({
+      applyOutputPath: '/tmp/visible-gap-missing-sent-initial-output.json',
+      fallbackLoader: async () => fallbackOutput
+    });
+    const recoveryPlan = buildSentInitialFollowUpRecoveryPlan({
+      plan: fakeSentInitialFollowUpPlan({
+        plans: [safePlanRecord('person-safe-1')]
+      }),
+      applyOutput: loaded.output
+    });
+
+    expect(loaded).toMatchObject({
+      source: 'supabase_fallback',
+      missingFile: true,
+      output: {
+        source: 'supabase_logs',
+        status: 'failed',
+        retryAfterSeconds: 60,
+        operations: [
+          {
+            personId: 'person-safe-1',
+            status: 'failed',
+            auditId: 'audit-fallback-1',
+            outboundEventId: 'event-fallback-1'
+          }
+        ]
+      }
+    });
+    expect(recoveryPlan).toMatchObject({
+      recoverableOperationCount: 1,
+      plans: [
+        {
+          personId: 'person-safe-1'
+        }
+      ]
+    });
+  });
+
+  it('can reconstruct recovery input from outbound events when CRM logs are unavailable', () => {
+    const fallbackOutput = buildSentInitialFollowUpApplyOutputFromLogs({
+      crmSyncLogs: [],
+      outboundEvents: [
+        {
+          id: 'event-only-fallback-1',
+          correlation_id: 'sent-initial-follow-up:person-safe-1:event-only',
+          event_type: 'sent_initial_follow_up_created',
+          status: 'failed',
+          payload: {
+            personId: 'person-safe-1',
+            personName: 'Lead person-safe-1',
+            cadenceName: 'RELATIONSHIP_BUILDING_V1',
+            oldCadenceStage: 'NOT_STARTED',
+            recommendedNextCadenceStage: 'INTRO_MESSAGE',
+            latestTouchStatus: 'SENT',
+            recommendedTaskTitle: 'Send relationship follow-up / intro message',
+            recommendedDueDate: '2026-06-08',
+            recommendedTaskType: 'introduction',
+            dedupeKey:
+              'outbound-cadence:person:person-safe-1:cadence:RELATIONSHIP_BUILDING_V1:stage:INTRO_MESSAGE:task:introduction'
+          },
+          error_payload: {
+            message: 'Limit reached',
+            retryAfterSeconds: 60
+          }
+        }
+      ],
+      generatedAt: new Date('2026-06-08T18:00:00.000Z')
+    });
+    const recoveryPlan = buildSentInitialFollowUpRecoveryPlan({
+      plan: fakeSentInitialFollowUpPlan({
+        plans: [safePlanRecord('person-safe-1')]
+      }),
+      applyOutput: fallbackOutput
+    });
+
+    expect(fallbackOutput).toMatchObject({
+      source: 'supabase_logs',
+      status: 'failed',
+      operations: [
+        {
+          personId: 'person-safe-1',
+          status: 'failed',
+          outboundEventId: 'event-only-fallback-1'
+        }
+      ]
+    });
+    expect(recoveryPlan.recoverableOperationCount).toBe(1);
   });
 });
 

@@ -1,11 +1,15 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { loadConfig } from '../src/config/env.js';
 import { logger } from '../src/config/logger.js';
 import { applySentInitialFollowUpPlan } from '../src/workflows/outbound/applySentInitialFollowUpsWorkflow.js';
+import {
+  buildSentInitialFollowUpApplyOutput,
+  DEFAULT_SENT_INITIAL_FOLLOW_UP_APPLY_OUTPUT_PATH,
+  writeSentInitialFollowUpOutputFile
+} from '../src/workflows/outbound/sentInitialFollowUpApplyOutput.js';
 
 const DEFAULT_PLAN_PATH = 'data/sent-initial-follow-up-plan.json';
-const DEFAULT_OUTPUT_PATH = 'data/sent-initial-follow-up-apply-latest.json';
 
 async function main() {
   const config = loadConfig();
@@ -31,51 +35,17 @@ async function main() {
       retryFallbackMs: process.env.SENT_INITIAL_FOLLOW_UP_429_FALLBACK_DELAY_MS
     }
   });
-  const output = {
-    status: result.status,
-    dryRun: result.dryRun,
-    liveEnabled: result.liveEnabled,
-    guard: result.guard,
-    summary: result.summary,
-    retryAfterSeconds: result.retryAfterSeconds,
-    recommendedNextCommand: result.recommendedNextCommand,
-    warnings: result.warnings,
-    operations: result.operations.map((operation) => ({
-      personId: operation.personId,
-      personName: operation.personName,
-      cadenceName: operation.cadenceName,
-      oldCadenceStage: operation.cadenceStage,
-      recommendedNextCadenceStage: operation.recommendedNextCadenceStage,
-      latestTouchStatus: operation.latestTouchStatus,
-      currentInitialTaskId: operation.currentInitialTaskId,
-      recommendedTaskTitle: operation.recommendedTaskTitle,
-      recommendedDueDate: operation.recommendedDueDate,
-      originalRecommendedDueDate: operation.originalRecommendedDueDate,
-      dueDateAdjusted: operation.dueDateAdjusted,
-      dueDateAdjustmentReason: operation.dueDateAdjustmentReason,
-      recommendedTaskType: operation.recommendedTaskType,
-      personStageUpdateEnabled: operation.personStageUpdateEnabled,
-      personStagePayload: operation.personStagePayload,
-      status: operation.status,
-      skippedReason: operation.skippedReason,
-      dedupeKey: operation.dedupeKey,
-      taskPayload: operation.taskPayload,
-      taskId: operation.task?.id,
-      personTargetId: operation.personTarget?.id,
-      companyTargetId: operation.companyTarget?.id,
-      personStageUpdate: operation.personStageUpdate,
-      duplicateTaskSkipped: operation.duplicateTaskSkipped,
-      retryAttempts: operation.retryAttempts,
-      retryAfterSeconds: operation.retryAfterSeconds,
-      verification: operation.verification,
-      auditId: operation.audit?.id,
-      outboundEventId: operation.outboundEvent?.id,
-      error: operation.error
-    }))
-  };
+  const output = buildSentInitialFollowUpApplyOutput({
+    result,
+    kind: 'apply'
+  });
 
   console.log(JSON.stringify(output, null, 2));
-  await writeFile(resolve(process.env.SENT_INITIAL_FOLLOW_UP_APPLY_OUTPUT_PATH ?? DEFAULT_OUTPUT_PATH), `${JSON.stringify(output, null, 2)}\n`, 'utf8');
+  await writeSentInitialFollowUpOutputFile(
+    process.env.SENT_INITIAL_FOLLOW_UP_APPLY_OUTPUT_PATH ??
+      DEFAULT_SENT_INITIAL_FOLLOW_UP_APPLY_OUTPUT_PATH,
+    output
+  );
 
   if (!result.dryRun && (result.summary.failed > 0 || result.summary.verificationFailed > 0)) {
     process.exitCode = 1;

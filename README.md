@@ -342,6 +342,10 @@ Sent-initial apply rules:
   `data/sent-initial-follow-up-apply-latest.json`
 - recovery rechecks the dedupe key and existing `taskTargets` before writing,
   so partially successful operations can be resumed without duplicate Tasks
+- if the latest apply output file is missing, recovery falls back to Supabase
+  `crm_sync_logs` and `outbound_events` for
+  `sent_initial_follow_up_create` / `sent_initial_follow_up_created` before
+  failing with an actionable message
 
 Apply rules:
 

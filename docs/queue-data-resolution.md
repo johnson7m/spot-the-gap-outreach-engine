@@ -422,6 +422,10 @@ The recovery script reads the latest apply output, selects failed,
 verification-failed, and repeated-failure-skipped operations, rechecks the
 Task dedupe key, rechecks existing Person `taskTargets`, and writes only the
 missing pieces. It remains dry-run unless the same live guards are enabled.
+If `data/sent-initial-follow-up-apply-latest.json` is missing, recovery
+attempts to reconstruct failed operations from Supabase `crm_sync_logs` and
+`outbound_events`; if neither source exists, it exits with an actionable
+missing-output response instead of throwing `ENOENT`.
 
 Guarded apply path:
 
