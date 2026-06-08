@@ -33,6 +33,7 @@ export async function getOutboundQueueWorkflow({
   const queue = buildQueue({
     queueSlug,
     people: records.people,
+    companies: records.companies,
     tasks: records.tasks,
     taskTargets: records.taskTargets,
     noteTargets: records.noteTargets,

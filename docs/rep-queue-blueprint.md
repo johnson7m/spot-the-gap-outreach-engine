@@ -362,6 +362,10 @@ Inclusion logic:
 - `enrichmentStatus=NEEDS_REVIEW` or `PARTIAL`
 - duplicate warning is present
 - no next task despite a non-terminal cadence
+- manually-created Twenty leads with missing outbound fields and enough CRM
+  signal for normalization planning
+- Company relation exists but Company display fields were not available in
+  queue reads
 - test/synthetic record when diagnostics include test records
 
 Review reasons:
@@ -369,10 +373,28 @@ Review reasons:
 - `missing_company`
 - `missing_email`
 - `missing_linkedin`
+- `missing_outbound_fields`
+- `needs_manual_normalization`
+- `ready_for_normalization`
+- `company_relation_unresolved`
 - `enrichment_partial`
 - `missing_next_task`
 - `test_record`
 - `manual_review`
+
+Suggested resolution actions:
+
+- `normalize_manual_lead`
+- `create_first_task`
+- `create_follow_up_task`
+- `enrich_company`
+- `review_company_relation`
+
+`normalize_manual_lead` is backed by the guarded
+`queues:apply-manual-lead-normalization` script. It is dry-run by default and,
+when live guards are explicitly enabled, updates only missing outbound fields
+on People. It does not create Tasks, taskTargets, Companies, owner updates, or
+assessment-field changes; first/follow-up task creation remains separate.
 
 Priority logic:
 

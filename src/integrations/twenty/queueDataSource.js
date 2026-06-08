@@ -93,6 +93,7 @@ export function createTwentyQueueDataSource({ config = {}, queueRead = {}, log, 
           maxPages: fetchMaxPages,
           objects: {
             people: objectResults.people.pagination,
+            companies: objectResults.companies.pagination,
             tasks: objectResults.tasks.pagination,
             taskTargets: objectResults.taskTargets.pagination,
             noteTargets: objectResults.noteTargets.pagination,
@@ -122,6 +123,7 @@ export function clearTwentyQueueReadCache() {
 async function readQueueObjects({ client, readObject }) {
   const [
     people,
+    companies,
     tasks,
     taskTargets,
     noteTargets,
@@ -129,6 +131,7 @@ async function readQueueObjects({ client, readObject }) {
     workspaceMembers
   ] = await Promise.all([
     readObject('people'),
+    readObject('companies'),
     readObject('tasks'),
     readObject('taskTargets'),
     readObject('noteTargets'),
@@ -138,6 +141,7 @@ async function readQueueObjects({ client, readObject }) {
 
   return {
     people,
+    companies,
     tasks,
     taskTargets,
     noteTargets,
@@ -305,6 +309,7 @@ function finalizeQueueRead({ objectResults, criticalObjects, cacheKey, cacheOpti
 function buildQueueRecordsFromObjectResults({ objectResults, warnings, readStatus, pagination = null }) {
   return {
     people: objectResults.people.records,
+    companies: objectResults.companies.records,
     tasks: objectResults.tasks.records,
     taskTargets: objectResults.taskTargets.records,
     noteTargets: objectResults.noteTargets.records,
@@ -472,6 +477,7 @@ function buildQueueCacheKey(parts) {
 function buildMissingCredentialsRecords({ pageSize, maxPages }) {
   return {
     people: [],
+    companies: [],
     tasks: [],
     taskTargets: [],
     noteTargets: [],

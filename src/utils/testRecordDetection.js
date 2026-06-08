@@ -12,6 +12,7 @@ const TEST_NAME_PATTERNS = [
   /cadencetest/i,
   /write\s*test/i,
   /writetest/i,
+  /\bjoe\s+schmoe\b/i,
   /scooby\s+doo/i
 ];
 
@@ -23,7 +24,8 @@ const TEST_COMPANY_PATTERNS = [
   /quick\s*capture\s*test/i,
   /quick-capture-test/i,
   /cadence\s*test/i,
-  /cadencetest/i
+  /cadencetest/i,
+  /^example$/i
 ];
 
 export function detectTestRecord(record = {}) {

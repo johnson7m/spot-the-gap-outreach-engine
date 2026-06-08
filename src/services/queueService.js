@@ -92,6 +92,7 @@ export function getQueueDefinition(queueSlug) {
 export function buildQueue({
   queueSlug,
   people = [],
+  companies = [],
   tasks = [],
   taskTargets = [],
   workspaceMembers = [],
@@ -110,6 +111,7 @@ export function buildQueue({
 
   const normalizedQuery = normalizeQueueQuery(query, workspaceUser);
   const workspaceMembersById = createWorkspaceMemberIndex(workspaceMembers);
+  const companiesById = createCompanyIndex(companies);
   const taskTargetsByTaskId = groupTaskTargetsByTaskId(taskTargets);
   const normalizedTasks = tasks.map((task) =>
     normalizeTaskRecord({
@@ -124,6 +126,7 @@ export function buildQueue({
     normalizePersonRecord({
       person,
       tasks: tasksByPersonId.get(String(person.id ?? '')) ?? [],
+      companiesById,
       workspaceMembersById
     })
   );
@@ -179,6 +182,7 @@ export function buildQueue({
 
 export function buildQueueClassificationDiagnostics({
   people = [],
+  companies = [],
   tasks = [],
   taskTargets = [],
   workspaceMembers = [],
@@ -193,6 +197,7 @@ export function buildQueueClassificationDiagnostics({
     { role: 'admin' }
   );
   const workspaceMembersById = createWorkspaceMemberIndex(workspaceMembers);
+  const companiesById = createCompanyIndex(companies);
   const taskTargetsByTaskId = groupTaskTargetsByTaskId(taskTargets);
   const normalizedTasks = tasks.map((task) =>
     normalizeTaskRecord({
@@ -207,6 +212,7 @@ export function buildQueueClassificationDiagnostics({
     normalizePersonRecord({
       person,
       tasks: tasksByPersonId.get(String(person.id ?? '')) ?? [],
+      companiesById,
       workspaceMembersById
     })
   );
@@ -516,16 +522,18 @@ function selectQueueCandidates({
             openTask,
             personTasks,
             reviewWarnings: review.warnings,
-            reviewReasons: review.reasons
+            reviewReasons: review.reasons,
+            suggestedResolutionActions: review.suggestedResolutionActions
           };
         })
         .filter(({ reviewWarnings }) => reviewWarnings.length > 0)
-        .map(({ person, openTask, personTasks, reviewWarnings, reviewReasons }) => toQueueItem({
+        .map(({ person, openTask, personTasks, reviewWarnings, reviewReasons, suggestedResolutionActions }) => toQueueItem({
           person,
           task: openTask,
           source: 'twenty:person',
           itemWarnings: reviewWarnings,
           reviewReasons,
+          suggestedResolutionActions,
           queueClassification: getPipelineReviewClassification(reviewReasons),
           queueClassificationReasons: reviewReasons,
           classificationDiagnostics: query.includeDiagnostics
@@ -544,17 +552,28 @@ function selectQueueCandidates({
   }
 }
 
-function normalizePersonRecord({ person = {}, tasks = [], workspaceMembersById = new Map() } = {}) {
+function normalizePersonRecord({
+  person = {},
+  tasks = [],
+  companiesById = new Map(),
+  workspaceMembersById = new Map()
+} = {}) {
   const owner = normalizeOwner(person, 'person', workspaceMembersById);
   const openTasks = tasks.filter(isOpenTask);
   const testRecord = detectTestRecord(person);
+  const company = resolvePersonCompanyContext(person, companiesById);
 
   return {
     raw: person,
     personId: stringify(person.id),
     name: getPersonName(person),
     title: firstString(person.jobTitle, person.title),
-    companyName: getCompanyName(person),
+    companyName: company.name,
+    targetCompanyId: company.id,
+    companySegment: company.segment,
+    companyIndustry: company.industry,
+    companyLinkedinUrl: company.linkedinUrl,
+    companyResolution: company,
     linkedinUrl: getLinkUrl(person.linkedinLink, person.linkedinLinkPrimaryLinkUrl, person.linkedinUrl),
     email: getEmail(person),
     outboundPipelineType: normalizeSelect(person.outboundPipelineType),
@@ -567,6 +586,7 @@ function normalizePersonRecord({ person = {}, tasks = [], workspaceMembersById =
     latestTouchStatus: normalizeSelect(person.latestTouchStatus),
     outreachAngle: firstString(person.outreachAngle),
     assessmentCompleted: Boolean(person.assessmentCompleted),
+    leadStage: normalizeSelect(person.leadStage),
     leadstageAuto: normalizeSelect(person.leadstageAuto),
     discoveryReadiness: normalizeSelect(person.discoveryReadiness),
     enrichmentStatus: normalizeSelect(person.enrichmentStatus),
@@ -646,8 +666,21 @@ function toQueueItem({
     personName: person?.name ?? null,
     title: person?.title ?? null,
     companyName: person?.companyName ?? null,
+    targetCompanyId: person?.targetCompanyId ?? task?.targetCompanyId ?? null,
+    companySegment: person?.companySegment ?? null,
+    companyIndustry: person?.companyIndustry ?? null,
+    companyLinkedinUrl: person?.companyLinkedinUrl ?? null,
+    companyResolution: person?.companyResolution
+      ? {
+          id: person.companyResolution.id,
+          name: person.companyResolution.name,
+          resolutionStatus: person.companyResolution.resolutionStatus,
+          resolutionPath: person.companyResolution.resolutionPath
+        }
+      : null,
     linkedinUrl: person?.linkedinUrl ?? null,
     email: person?.email ?? null,
+    leadStage: person?.leadStage ?? null,
     outboundPipelineType: person?.outboundPipelineType ?? null,
     cadenceName: person?.cadenceName ?? task?.cadenceName ?? null,
     cadenceStage: person?.cadenceStage ?? task?.cadenceStage ?? null,
@@ -674,7 +707,6 @@ function toQueueItem({
     personResolutionPath: task?.personResolutionPath ?? [],
     personResolutionConfidence: task?.personResolutionConfidence ?? null,
     personResolutionEvidence: task?.personResolutionEvidence ?? [],
-    targetCompanyId: task?.targetCompanyId ?? null,
     queueBucket: task && !task.personId ? 'unassigned_tasks' : null,
     suggestedResolutionActions:
       suggestedResolutionActions.length > 0
@@ -946,6 +978,18 @@ function classifyFollowUpTask({ person, task, tasks = [] } = {}) {
 }
 
 function getPipelineReviewClassification(reviewReasons = []) {
+  if (reviewReasons.includes('ready_for_normalization')) {
+    return 'pipeline_review_ready_for_normalization';
+  }
+
+  if (reviewReasons.includes('needs_manual_normalization')) {
+    return 'pipeline_review_needs_manual_normalization';
+  }
+
+  if (reviewReasons.includes('company_relation_unresolved')) {
+    return 'pipeline_review_company_relation_unresolved';
+  }
+
   if (reviewReasons.includes('enrichment_partial')) {
     return 'pipeline_review_missing_enrichment';
   }
@@ -1144,6 +1188,7 @@ function getTaskClassificationText(task = {}) {
 function getPipelineReview(person, openTask, tasks = []) {
   const warnings = [];
   const reasons = [];
+  const suggestedResolutionActions = [];
 
   if (!person.email) {
     warnings.push('Missing email.');
@@ -1155,19 +1200,35 @@ function getPipelineReview(person, openTask, tasks = []) {
     reasons.push('missing_linkedin');
   }
 
-  if (!person.companyName) {
+  if (!person.companyName && !person.targetCompanyId) {
     warnings.push('Missing company.');
     reasons.push('missing_company');
+    suggestedResolutionActions.push('enrich_company');
+  } else if (!person.companyName && person.targetCompanyId) {
+    warnings.push('Company relation exists, but the Company name could not be resolved from queue reads.');
+    reasons.push('company_relation_unresolved');
+    suggestedResolutionActions.push('review_company_relation');
   }
 
   if (!person.cadenceName) {
     warnings.push('Missing cadence name.');
-    reasons.push('manual_review');
+    reasons.push('missing_outbound_fields');
   }
 
   if (!person.cadenceStage) {
     warnings.push('Missing cadence stage.');
-    reasons.push('manual_review');
+    reasons.push('missing_outbound_fields');
+  }
+
+  if (!person.outboundPipelineType) {
+    warnings.push('Missing outbound pipeline type.');
+    reasons.push('missing_outbound_fields');
+  }
+
+  if (isManualLeadNormalizationCandidate(person)) {
+    warnings.push('Manual CRM lead has enough signal for outbound normalization planning.');
+    reasons.push('needs_manual_normalization', 'ready_for_normalization');
+    suggestedResolutionActions.push('normalize_manual_lead');
   }
 
   if (REVIEW_ENRICHMENT_STATUSES.has(person.enrichmentStatus)) {
@@ -1183,11 +1244,13 @@ function getPipelineReview(person, openTask, tasks = []) {
   if (person.cadenceName && !isTerminalCadenceStage(person.cadenceStage) && !openTask) {
     warnings.push('No open next task found despite non-terminal cadence.');
     reasons.push('missing_next_task');
+    suggestedResolutionActions.push('create_first_task');
   }
 
   if (isSentInitialFollowUpGap(person, tasks)) {
     warnings.push('Initial touch appears sent, but no follow-up task exists.');
     reasons.push('missing_follow_up_task');
+    suggestedResolutionActions.push('create_follow_up_task');
   }
 
   if (person.isTestRecord) {
@@ -1197,8 +1260,26 @@ function getPipelineReview(person, openTask, tasks = []) {
 
   return {
     warnings,
-    reasons: uniqueStrings(reasons)
+    reasons: uniqueStrings(reasons),
+    suggestedResolutionActions: uniqueStrings(suggestedResolutionActions)
   };
+}
+
+function isManualLeadNormalizationCandidate(person = {}) {
+  const missingOutboundFields = !person.outboundPipelineType || !person.cadenceName || !person.cadenceStage;
+  const hasCrmSignal = Boolean(
+    person.leadStage ||
+      person.linkedinUrl ||
+      person.email ||
+      person.targetCompanyId ||
+      person.companyName ||
+      person.owner?.id ||
+      person.owner?.email ||
+      person.raw?.createdBy ||
+      person.raw?.createdById
+  );
+
+  return missingOutboundFields && hasCrmSignal && person.assessmentCompleted !== true;
 }
 
 function getRecommendedClassificationFix({ person, task, tasks = [], diagnostic } = {}) {
@@ -1347,6 +1428,102 @@ export function createWorkspaceMemberIndex(workspaceMembers = []) {
           userId: stringify(member.userId)
         }
       ])
+  );
+}
+
+export function createCompanyIndex(companies = []) {
+  return new Map(
+    (companies ?? [])
+      .filter((company) => getCompanyRecordId(company))
+      .map((company) => [
+        String(getCompanyRecordId(company)),
+        normalizeCompanyRecord(company)
+      ])
+  );
+}
+
+export function normalizeCompanyRecord(company = {}) {
+  return {
+    id: getCompanyRecordId(company),
+    name: getCompanyRecordName(company),
+    segment: normalizeSelect(firstString(company.segment, company.segmentSelect, company.segment?.value, company.segment?.name)),
+    industry: normalizeSelect(firstString(company.industry, company.industrySelect, company.industry?.value, company.industry?.name)),
+    linkedinUrl: getLinkUrl(company.linkedinLink, company.linkedinLinkPrimaryLinkUrl, company.linkedinUrl),
+    website: getLinkUrl(company.domainName, company.domainNamePrimaryLinkUrl, company.website, company.companyWebsite)
+  };
+}
+
+export function resolvePersonCompanyContext(person = {}, companiesById = new Map()) {
+  const relation = firstObject(
+    person.company,
+    person.primaryCompany,
+    person.account,
+    person.companyId && companiesById.get(String(person.companyId)),
+    person.companyID && companiesById.get(String(person.companyID))
+  );
+  const relationId = firstString(
+    person.companyId,
+    person.companyID,
+    person.company?.id,
+    person.company?.recordId,
+    person.company?.targetObjectId,
+    person.company?.value,
+    person.primaryCompany?.id,
+    person.primaryCompany?.recordId,
+    person.account?.id,
+    person.companies?.[0]?.id,
+    person.companies?.[0]?.recordId,
+    person.companyIds?.[0]
+  );
+  const indexed = relationId ? companiesById.get(String(relationId)) : null;
+  const source = indexed ?? normalizeCompanyRecord(relation ?? {});
+  const name = firstString(
+    source.name,
+    getCompanyRecordName(relation),
+    person.companyName,
+    person.companyNameName
+  );
+  const id = firstString(source.id, relationId);
+  const resolutionPath = [
+    indexed ? 'companiesById' : null,
+    relationId ? 'person.companyId/company relation id' : null,
+    relation ? 'person.company expanded relation' : null,
+    person.companyName || person.companyNameName ? 'person flattened company name' : null
+  ].filter(Boolean);
+
+  return {
+    id: id || null,
+    name: name || null,
+    segment: source.segment || null,
+    industry: source.industry || null,
+    linkedinUrl: source.linkedinUrl || null,
+    website: source.website || null,
+    relationExists: Boolean(id || name),
+    resolutionStatus: id && indexed
+      ? 'resolved_from_company_read'
+      : id
+        ? 'resolved_relation_id_only'
+        : name
+          ? 'resolved_name_only'
+          : 'missing',
+    resolutionPath,
+    rawRelation: relation ?? null
+  };
+}
+
+function getCompanyRecordId(company = {}) {
+  company = company ?? {};
+  return firstString(company.id, company.recordId, company.companyId, company.companyID);
+}
+
+function getCompanyRecordName(company = {}) {
+  company = company ?? {};
+  return firstString(
+    company.name,
+    company.displayName,
+    company.name?.name,
+    company.name?.fullName,
+    company.companyName
   );
 }
 
@@ -1675,7 +1852,7 @@ function findUniquePersonMatchByOwnerOrAssignee({ task = {}, people = [], worksp
 }
 
 function getCompanyId(person = {}) {
-  return stringify(person.companyId ?? person.company?.id ?? person.companyID);
+  return stringify(resolvePersonCompanyContext(person).id);
 }
 
 function getPersonName(person) {
@@ -1690,12 +1867,7 @@ function getPersonName(person) {
 }
 
 function getCompanyName(person) {
-  return firstString(
-    person.company?.name,
-    person.company?.displayName,
-    person.companyName,
-    person.companyNameName
-  );
+  return firstString(resolvePersonCompanyContext(person).name);
 }
 
 function getEmail(record) {
@@ -1878,6 +2050,10 @@ function firstString(...values) {
   }
 
   return '';
+}
+
+function firstObject(...values) {
+  return values.find((value) => value && typeof value === 'object' && !Array.isArray(value)) ?? null;
 }
 
 function stringify(value) {

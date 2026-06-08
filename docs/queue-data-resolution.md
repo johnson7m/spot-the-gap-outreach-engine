@@ -99,9 +99,9 @@ Synthetic detection currently checks:
 - email values containing `example.com`, `webhooktest.com`, `sync-test`,
   `cadence-test`, or `quick-capture-test`
 - Person names containing `Test`, `Webhook Test`, `CadenceTest`, `WriteTest`,
-  or `Scooby Doo`
+  `Joe Schmoe`, or `Scooby Doo`
 - company names that clearly contain test, sync-test, quick-capture-test, or
-  cadence-test markers
+  cadence-test markers, plus a literal placeholder company name of `example`
 
 Hidden test count is returned in `data.diagnostics.hiddenTestRecords`.
 
@@ -247,9 +247,43 @@ Pipeline Review:
 - enrichment status is `NEEDS_REVIEW` or `PARTIAL`
 - duplicate warning exists
 - non-terminal cadence exists but no next task is found
+- manually-created Twenty People with missing outbound fields but enough CRM
+  signal are classified as ready for normalization
+- Person Company relations are resolved through expanded Person data,
+  flattened relation IDs, and fetched Companies; `missing_company` is not used
+  when a relation ID exists
 - `reviewReasons` separate `missing_company`, `missing_email`,
-  `missing_linkedin`, `enrichment_partial`, `missing_next_task`,
+  `missing_linkedin`, `missing_outbound_fields`,
+  `needs_manual_normalization`, `ready_for_normalization`,
+  `company_relation_unresolved`, `enrichment_partial`, `missing_next_task`,
   `test_record`, and `manual_review`
+
+Manual lead normalization diagnostics:
+
+```bash
+PERSON_ID=<twenty-person-id> npm run queues:inspect-person
+npm run queues:plan-manual-lead-normalization
+```
+
+`queues:inspect-person` prints raw queue-relevant Person fields, Company
+relation resolution, owner/created-by context, associated taskTargets, queue
+classification, why Company/cadence fields resolved empty, and a recommended
+normalization. `queues:plan-manual-lead-normalization` writes
+`data/manual-lead-normalization-plan.json` and
+`data/manual-lead-normalization-summary.md`. It is read-only.
+
+Guarded apply:
+
+```bash
+npm run queues:apply-manual-lead-normalization
+```
+
+This command is dry-run by default. Live apply requires
+`MANUAL_LEAD_NORMALIZATION_APPLY_ENABLED=true`, `LIVE_TEST=true`, and
+`MANUAL_LEAD_NORMALIZATION_BATCH_SIZE`. It updates only missing outbound fields
+on People, skips review/test records by default, excludes protected assessment
+fields, and does not create Tasks, taskTargets, Companies, or owner changes.
+Task creation remains in separate guarded task apply paths.
 
 ## Queue Classification
 

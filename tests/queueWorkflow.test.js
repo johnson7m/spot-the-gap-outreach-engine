@@ -10,6 +10,7 @@ import { buildQueueClassificationDiagnostics } from '../src/services/queueServic
 import { processAssessmentSubmission } from '../src/workflows/assessmentWorkflow.js';
 import { getOutboundQueueWorkflow } from '../src/workflows/outbound/getQueueWorkflow.js';
 import { buildMissingNextTaskPlans } from '../src/workflows/outbound/missingNextTaskPlanner.js';
+import { buildManualLeadNormalizationPlans } from '../src/workflows/outbound/manualLeadNormalizationPlanner.js';
 import { buildSentInitialFollowUpPlans } from '../src/workflows/outbound/sentInitialFollowUpPlanner.js';
 
 const baseConfig = {
@@ -919,6 +920,48 @@ describe('outbound queue workflow', () => {
     });
   });
 
+  it('flags placeholder manual records as synthetic', async () => {
+    const testPerson = {
+      ...queuePeople()[0],
+      id: 'people-placeholder-record',
+      name: {
+        firstName: 'Joe',
+        lastName: 'Schmoe'
+      },
+      company: {
+        name: 'example'
+      },
+      emails: {
+        primaryEmail: ''
+      }
+    };
+    const result = await getOutboundQueueWorkflow({
+      queueSlug: 'pipeline-review',
+      query: {
+        ownerScope: 'all',
+        includeTestRecords: 'true'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({
+        people: [testPerson],
+        tasks: []
+      }),
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+
+    expect(result.items[0]).toMatchObject({
+      personId: 'people-placeholder-record',
+      isTestRecord: true
+    });
+    expect(result.items[0].testRecordReasons).toEqual(
+      expect.arrayContaining([
+        'Name looks synthetic: Joe Schmoe',
+        'Company looks synthetic: example'
+      ])
+    );
+  });
+
   it('moves noisy timeline pagination warnings into diagnostics metadata', async () => {
     const result = await getOutboundQueueWorkflow({
       queueSlug: 'fresh-leads',
@@ -1182,6 +1225,214 @@ describe('outbound queue workflow', () => {
         'missing_next_task'
       ])
     );
+  });
+
+  it('resolves Person Company relation from fetched Company records', async () => {
+    const result = await getOutboundQueueWorkflow({
+      queueSlug: 'pipeline-review',
+      query: {
+        ownerScope: 'all'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({
+        people: [
+          {
+            id: 'people-manual-company',
+            name: {
+              firstName: 'Joseph',
+              lastName: 'Dailey'
+            },
+            companyId: 'company-joseph',
+            linkedinLink: {
+              primaryLinkUrl: 'https://www.linkedin.com/in/joseph-dailey'
+            },
+            leadStage: 'OUTREACH_INITIATED',
+            assessmentCompleted: false,
+            ownerId: 'workspace-member-rep'
+          }
+        ],
+        companies: [
+          {
+            id: 'company-joseph',
+            name: 'Joseph Company',
+            segment: 'SMB',
+            industry: 'PROFESSIONAL_SERVICES',
+            linkedinLink: {
+              primaryLinkUrl: 'https://www.linkedin.com/company/joseph-company'
+            }
+          }
+        ],
+        workspaceMembers: [
+          {
+            id: 'workspace-member-rep',
+            userEmail: 'rep@visiblegap.com'
+          }
+        ],
+        tasks: [],
+        taskTargets: []
+      }),
+      now: new Date('2026-06-08T15:00:00.000Z')
+    });
+    const item = result.items[0];
+
+    expect(item).toMatchObject({
+      personId: 'people-manual-company',
+      companyName: 'Joseph Company',
+      targetCompanyId: 'company-joseph',
+      companySegment: 'SMB',
+      companyIndustry: 'PROFESSIONAL_SERVICES',
+      leadStage: 'OUTREACH_INITIATED',
+      queueClassification: 'pipeline_review_ready_for_normalization'
+    });
+    expect(item.reviewReasons).not.toContain('missing_company');
+    expect(item.reviewReasons).toEqual(
+      expect.arrayContaining(['missing_outbound_fields', 'needs_manual_normalization', 'ready_for_normalization'])
+    );
+    expect(item.suggestedResolutionActions).toContain('normalize_manual_lead');
+  });
+
+  it('marks unresolved Company relation separately from missing company', async () => {
+    const result = await getOutboundQueueWorkflow({
+      queueSlug: 'pipeline-review',
+      query: {
+        ownerScope: 'all'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({
+        people: [
+          {
+            id: 'people-company-id-only',
+            name: {
+              firstName: 'Company',
+              lastName: 'Only'
+            },
+            companyId: 'company-missing-from-read',
+            linkedinLink: {
+              primaryLinkUrl: 'https://www.linkedin.com/in/company-only'
+            },
+            leadStage: 'OUTREACH_INITIATED',
+            assessmentCompleted: false,
+            ownerId: 'workspace-member-rep'
+          }
+        ],
+        companies: [],
+        workspaceMembers: [
+          {
+            id: 'workspace-member-rep',
+            userEmail: 'rep@visiblegap.com'
+          }
+        ],
+        tasks: [],
+        taskTargets: []
+      }),
+      now: new Date('2026-06-08T15:00:00.000Z')
+    });
+    const item = result.items[0];
+
+    expect(item.companyName).toBeNull();
+    expect(item.targetCompanyId).toBe('company-missing-from-read');
+    expect(item.reviewReasons).not.toContain('missing_company');
+    expect(item.reviewReasons).toContain('company_relation_unresolved');
+    expect(item.suggestedResolutionActions).toContain('review_company_relation');
+  });
+
+  it('detects manually-created People with leadStage and missing outbound fields', () => {
+    const plan = buildManualLeadNormalizationPlans(
+      {
+        people: [
+          {
+            id: 'people-joseph',
+            name: {
+              firstName: 'Joseph',
+              lastName: 'Dailey'
+            },
+            companyId: 'company-joseph',
+            linkedinLink: {
+              primaryLinkUrl: 'https://www.linkedin.com/in/joseph-dailey'
+            },
+            leadStage: 'OUTREACH_INITIATED',
+            assessmentCompleted: false,
+            ownerId: 'workspace-member-darrean'
+          }
+        ],
+        companies: [
+          {
+            id: 'company-joseph',
+            name: 'Joseph Company',
+            segment: 'MID_MARKET',
+            industry: 'CONSULTING'
+          }
+        ],
+        tasks: [],
+        taskTargets: [],
+        workspaceMembers: [
+          {
+            id: 'workspace-member-darrean',
+            userEmail: 'darrean.beller@visiblegap.com',
+            name: {
+              firstName: 'Darrean',
+              lastName: 'Beller'
+            }
+          }
+        ]
+      },
+      {
+        now: new Date('2026-06-08T15:00:00.000Z')
+      }
+    );
+
+    expect(plan.records).toHaveLength(1);
+    expect(plan.records[0]).toMatchObject({
+      personId: 'people-joseph',
+      assignedRep: 'darrean.beller@visiblegap.com',
+      leadStage: 'OUTREACH_INITIATED',
+      assessmentCompleted: false,
+      safeToNormalize: true,
+      recommendedUpdates: {
+        outboundPipelineType: 'RELATIONSHIP_BUILDING',
+        cadenceName: 'RELATIONSHIP_BUILDING_V1',
+        cadenceStage: 'CONNECTION_REQUEST',
+        latestTouchChannel: 'LINKEDIN',
+        latestTouchStatus: 'SENT'
+      },
+      recommendedTaskAction: 'create_follow_up_task',
+      recommendedTaskTitle: 'Send relationship follow-up / intro message'
+    });
+    expect(Object.keys(plan.records[0].recommendedUpdates)).not.toContain('assessmentCompleted');
+  });
+
+  it('does not treat assessmentCompleted=false as Warm Assessment', async () => {
+    const result = await getOutboundQueueWorkflow({
+      queueSlug: 'warm-assessments',
+      query: {
+        ownerScope: 'all'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({
+        people: [
+          {
+            id: 'people-false-assessment',
+            name: {
+              firstName: 'False',
+              lastName: 'Assessment'
+            },
+            assessmentCompleted: false,
+            leadstageAuto: 'NEW_LEAD',
+            owner: {
+              userEmail: 'rep@visiblegap.com'
+            }
+          }
+        ],
+        tasks: [],
+        taskTargets: []
+      }),
+      now: new Date('2026-06-08T15:00:00.000Z')
+    });
+
+    expect(result.items).toEqual([]);
   });
 
   it('maps owner and task assignee IDs to workspace member emails', async () => {
@@ -1856,6 +2107,7 @@ function fakeQueueDataSource(overrides = {}) {
     async listQueueRecords() {
       return {
         people: overrides.people ?? queuePeople(),
+        companies: overrides.companies ?? [],
         tasks: overrides.tasks ?? queueTasks(),
         taskTargets: overrides.taskTargets ?? [],
         noteTargets: overrides.noteTargets ?? [],
@@ -1872,6 +2124,7 @@ function fakeTwentyQueueRestClient({ failures = {}, records = {} } = {}) {
     failures,
     calls: {
       people: 0,
+      companies: 0,
       tasks: 0,
       taskTargets: 0,
       noteTargets: 0,
@@ -1925,6 +2178,10 @@ function defaultTwentyQueueRecords(objectPlural) {
 
   if (objectPlural === 'tasks') {
     return queueTasks();
+  }
+
+  if (objectPlural === 'companies') {
+    return [];
   }
 
   if (objectPlural === 'taskTargets') {

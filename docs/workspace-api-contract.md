@@ -732,6 +732,10 @@ Pipeline Review criteria:
 - `enrichmentStatus=NEEDS_REVIEW` or `PARTIAL`.
 - Duplicate warning fields are present.
 - Non-terminal cadence exists but no open next task was found.
+- Manually-created Twenty People have missing outbound fields but enough CRM
+  signal to plan normalization.
+- A Company relation ID exists but Company details were not available from the
+  Person relation or fetched Companies list.
 - Obvious test/synthetic records are included only when
   `includeTestRecords=true`.
 
@@ -740,10 +744,35 @@ Pipeline Review items include `reviewReasons` values such as:
 - `missing_company`
 - `missing_email`
 - `missing_linkedin`
+- `missing_outbound_fields`
+- `needs_manual_normalization`
+- `ready_for_normalization`
+- `company_relation_unresolved`
 - `enrichment_partial`
 - `missing_next_task`
 - `test_record`
 - `manual_review`
+
+Pipeline Review items may include `suggestedResolutionActions`:
+
+- `normalize_manual_lead`
+- `create_first_task`
+- `create_follow_up_task`
+- `enrich_company`
+- `review_company_relation`
+
+Manual lead normalization is handled outside the workspace API for now through
+the guarded operations script:
+
+```bash
+npm run queues:apply-manual-lead-normalization
+```
+
+The script is dry-run by default. Live apply requires
+`MANUAL_LEAD_NORMALIZATION_APPLY_ENABLED=true`, `LIVE_TEST=true`, and
+`MANUAL_LEAD_NORMALIZATION_BATCH_SIZE`. It updates only missing outbound fields
+on People and intentionally does not create Tasks, taskTargets, Companies,
+owner changes, or assessment-field updates.
 
 Relationship fallback:
 

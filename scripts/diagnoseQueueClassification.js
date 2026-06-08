@@ -19,6 +19,7 @@ async function main() {
   });
   const report = buildQueueClassificationDiagnostics({
     people: records.people,
+    companies: records.companies,
     tasks: records.tasks,
     taskTargets: records.taskTargets,
     workspaceMembers: records.workspaceMembers,

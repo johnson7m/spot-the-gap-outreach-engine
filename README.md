@@ -212,7 +212,10 @@ npm run queues:inspect-task-relationships -- --person-id=<twenty-person-id>
 npm run queues:inspect-task-relationships -- --task-id=<twenty-task-id>
 npm run queues:inspect-task-relationships -- --json
 npm run queues:inspect-task-relationships -- --csv
+npm run queues:inspect-person
 npm run queues:diagnose-classification
+npm run queues:plan-manual-lead-normalization
+npm run queues:apply-manual-lead-normalization
 npm run queues:plan-missing-next-tasks
 npm run queues:apply-missing-next-tasks
 npm run legacy:tasks:plan
@@ -237,14 +240,46 @@ SHOW_ONLY_SAFE_LINKS=true npm run queues:inspect-task-relationships -- --summary
 Queue classification diagnostics:
 
 ```bash
+PERSON_ID=<twenty-person-id> npm run queues:inspect-person
 npm run queues:diagnose-classification
 PERSON_ID=<twenty-person-id> npm run queues:diagnose-classification
 TASK_ID=<twenty-task-id> npm run queues:diagnose-classification
 LIMIT=25 npm run queues:diagnose-classification
 ```
 
-This read-only script shows each Person/Task pair, matched queues before
-precedence, final queue, excluded queues, and classification reasons.
+`queues:inspect-person` is read-only and prints raw queue-relevant Person
+fields, Company relation resolution, owner/created-by context, associated
+taskTargets, queue classification, and a recommended manual normalization plan.
+`queues:diagnose-classification` shows each Person/Task pair, matched queues
+before precedence, final queue, excluded queues, and classification reasons.
+
+Manual lead normalization planning:
+
+```bash
+npm run queues:plan-manual-lead-normalization
+```
+
+This read-only planner finds manually-created Twenty People with missing
+outbound fields but enough CRM signal, such as `leadStage`, LinkedIn, email,
+Company relation, owner, or created-by context. It writes:
+
+- `data/manual-lead-normalization-plan.json`
+- `data/manual-lead-normalization-summary.md`
+
+Guarded manual lead normalization apply:
+
+```bash
+npm run queues:apply-manual-lead-normalization
+```
+
+This command is dry-run by default. Live People updates require
+`MANUAL_LEAD_NORMALIZATION_APPLY_ENABLED=true`, `LIVE_TEST=true`, and an
+explicit `MANUAL_LEAD_NORMALIZATION_BATCH_SIZE`. The apply path updates only
+missing outbound fields on People, excludes protected assessment fields, does
+not overwrite non-empty outbound fields unless
+`MANUAL_LEAD_NORMALIZATION_FORCE=true`, and never creates Tasks, taskTargets,
+Companies, owner changes, or assessment updates. Task creation remains a
+separate guarded workflow.
 
 The task planner identifies existing Tasks missing taskTarget relationships and
 recommends `link_task_to_person`, `link_task_to_company`, `leave_unassigned`, or
@@ -437,8 +472,10 @@ even when no open Task exists. Those items include
 `suggestedResolutionActions=["create_next_task"]` and the warning
 `No open task exists yet; create the first cadence task.` Pipeline Review items
 include structured `reviewReasons` such as `missing_company`,
-`missing_email`, `missing_linkedin`, `enrichment_partial`,
-`missing_next_task`, `test_record`, and `manual_review`.
+`missing_email`, `missing_linkedin`, `missing_outbound_fields`,
+`needs_manual_normalization`, `ready_for_normalization`,
+`company_relation_unresolved`, `enrichment_partial`, `missing_next_task`,
+`test_record`, and `manual_review`.
 
 Queue responses hide obvious test/synthetic People by default and report the
 count as `data.diagnostics.hiddenTestRecords`. Use `includeTestRecords=true`
