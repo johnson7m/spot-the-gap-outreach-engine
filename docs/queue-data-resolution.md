@@ -402,6 +402,26 @@ Live sent-initial apply rules:
   `SENT_INITIAL_FOLLOW_UP_LINK_COMPANY=true`.
 - Writes `crm_sync_logs` and `outbound_events` with
   `event_type=sent_initial_follow_up_created` during live apply.
+- Paces live writes with `SENT_INITIAL_FOLLOW_UP_WRITE_DELAY_MS`, default
+  `1500`.
+- Retries Twenty 429 responses when
+  `SENT_INITIAL_FOLLOW_UP_RETRY_AFTER_429=true`; it respects `retry-after`
+  and otherwise waits `SENT_INITIAL_FOLLOW_UP_429_FALLBACK_DELAY_MS`, default
+  `60000`.
+- Writes latest apply output to
+  `data/sent-initial-follow-up-apply-latest.json`.
+- Returns `partial_success` when some records verify and others fail.
+
+Recovery for a partially successful sent-initial apply:
+
+```bash
+npm run queues:recover-sent-initial-follow-ups
+```
+
+The recovery script reads the latest apply output, selects failed,
+verification-failed, and repeated-failure-skipped operations, rechecks the
+Task dedupe key, rechecks existing Person `taskTargets`, and writes only the
+missing pieces. It remains dry-run unless the same live guards are enabled.
 
 Guarded apply path:
 

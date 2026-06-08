@@ -4,6 +4,7 @@ import { processAssessmentSubmission } from '../src/workflows/assessmentWorkflow
 import {
   applySentInitialFollowUpPlan,
   buildSentInitialFollowUpOperation,
+  buildSentInitialFollowUpRecoveryPlan,
   buildSentInitialFollowUpTaskPayload,
   selectSentInitialFollowUpCandidates
 } from '../src/workflows/outbound/applySentInitialFollowUpsWorkflow.js';
@@ -257,6 +258,91 @@ describe('sent initial follow-up apply workflow', () => {
     });
   });
 
+  it('retries Twenty 429 errors before marking an operation failed', async () => {
+    const restClient = fakeTaskClient({
+      createFailures: {
+        tasks: [httpError(429, 'Limit reached', { retryAfter: 2 })]
+      }
+    });
+    const sleepCalls = [];
+    const result = await applySentInitialFollowUpPlan({
+      plan: fakeSentInitialFollowUpPlan({
+        plans: [safePlanRecord('person-safe-1')]
+      }),
+      config: baseConfig(),
+      restClient,
+      operationalStore: fakeOperationalStore(),
+      options: {
+        applyEnabled: true,
+        liveTest: true,
+        batchSize: 1,
+        offset: 0,
+        writeDelayMs: 0,
+        retryAfter429: true,
+        maxRetryAttempts: 2,
+        retryFallbackMs: 60000
+      },
+      sleep: async (ms) => {
+        sleepCalls.push(ms);
+      }
+    });
+
+    expect(sleepCalls).toEqual([2000]);
+    expect(result).toMatchObject({
+      status: 'succeeded',
+      retryAfterSeconds: 2,
+      summary: {
+        attempted: 1,
+        succeeded: 1
+      }
+    });
+    expect(result.operations[0]).toMatchObject({
+      status: 'verification_succeeded',
+      retryAttempts: 1,
+      retryAfterSeconds: 2
+    });
+    expect(restClient.created.filter((entry) => entry.objectPlural === 'tasks')).toHaveLength(1);
+  });
+
+  it('returns partial_success and recovery guidance when some operations fail', async () => {
+    const restClient = fakeTaskClient({
+      createFailures: {
+        tasks: [null, httpError(429, 'Limit reached')]
+      }
+    });
+    const result = await applySentInitialFollowUpPlan({
+      plan: fakeSentInitialFollowUpPlan({
+        plans: [safePlanRecord('person-safe-1'), safePlanRecord('person-safe-2')]
+      }),
+      config: baseConfig(),
+      restClient,
+      operationalStore: fakeOperationalStore(),
+      options: {
+        applyEnabled: true,
+        liveTest: true,
+        batchSize: 2,
+        offset: 0,
+        writeDelayMs: 0,
+        retryAfter429: false,
+        maxRetryAttempts: 0,
+        retryFallbackMs: 3000
+      },
+      sleep: async () => {}
+    });
+
+    expect(result).toMatchObject({
+      status: 'partial_success',
+      retryAfterSeconds: 3,
+      summary: {
+        attempted: 2,
+        succeeded: 1,
+        failed: 1
+      },
+      recommendedNextCommand:
+        'SENT_INITIAL_FOLLOW_UP_APPLY_ENABLED=true LIVE_TEST=true npm run queues:recover-sent-initial-follow-ups'
+    });
+  });
+
   it('marks verification_failed when the created taskTarget cannot be verified', async () => {
     const result = await applySentInitialFollowUpPlan({
       plan: fakeSentInitialFollowUpPlan({
@@ -373,6 +459,111 @@ describe('sent initial follow-up apply workflow', () => {
 
     expect(operation.companyTargetEnabled).toBe(false);
   });
+
+  it('builds recovery plans from failed and repeated-failure skipped operations', () => {
+    const recoveryPlan = buildSentInitialFollowUpRecoveryPlan({
+      plan: fakeSentInitialFollowUpPlan(),
+      applyOutput: {
+        status: 'partial_success',
+        operations: [
+          {
+            personId: 'person-safe-1',
+            status: 'verification_succeeded'
+          },
+          {
+            personId: 'person-safe-2',
+            status: 'failed'
+          },
+          {
+            personId: 'person-safe-3',
+            status: 'skipped',
+            skippedReason: 'Stopped after repeated failures.',
+            cadenceName: 'RELATIONSHIP_BUILDING_V1',
+            oldCadenceStage: 'NOT_STARTED',
+            recommendedNextCadenceStage: 'INTRO_MESSAGE',
+            latestTouchStatus: 'SENT',
+            recommendedTaskTitle: 'Send relationship follow-up / intro message',
+            recommendedDueDate: '2026-06-08',
+            recommendedTaskType: 'introduction'
+          }
+        ]
+      }
+    });
+
+    expect(recoveryPlan).toMatchObject({
+      status: 'recovery_plan',
+      recoverableOperationCount: 2
+    });
+    expect(recoveryPlan.plans.map((record) => record.personId)).toEqual(['person-safe-2', 'person-safe-3']);
+  });
+
+  it('recovers a failed operation without duplicating an existing deduped task', async () => {
+    const operation = buildSentInitialFollowUpOperation({
+      record: safePlanRecord('person-safe-1'),
+      now: new Date('2026-06-08T15:00:00.000Z')
+    });
+    const recoveryPlan = buildSentInitialFollowUpRecoveryPlan({
+      plan: fakeSentInitialFollowUpPlan({
+        plans: [safePlanRecord('person-safe-1')]
+      }),
+      applyOutput: {
+        status: 'partial_success',
+        operations: [
+          {
+            personId: 'person-safe-1',
+            status: 'failed',
+            dedupeKey: operation.dedupeKey
+          }
+        ]
+      }
+    });
+    const restClient = fakeTaskClient({
+      tasks: [
+        {
+          id: 'task-existing-dedupe',
+          title: 'Send relationship follow-up / intro message',
+          status: 'DONE',
+          bodyV2: {
+            markdown: `Dedupe key: ${operation.dedupeKey}`
+          }
+        }
+      ]
+    });
+    const result = await applySentInitialFollowUpPlan({
+      plan: recoveryPlan,
+      config: baseConfig(),
+      restClient,
+      operationalStore: fakeOperationalStore(),
+      options: {
+        applyEnabled: true,
+        liveTest: true,
+        batchSize: 1,
+        offset: 0,
+        writeDelayMs: 0
+      },
+      now: new Date('2026-06-08T15:00:00.000Z')
+    });
+
+    expect(result.operations[0]).toMatchObject({
+      status: 'verification_succeeded',
+      duplicateTaskSkipped: true,
+      task: {
+        id: 'task-existing-dedupe'
+      },
+      personTarget: {
+        targetPersonId: 'person-safe-1'
+      }
+    });
+    expect(restClient.created).toEqual([
+      {
+        objectPlural: 'taskTargets',
+        payload: {
+          taskId: 'task-existing-dedupe',
+          targetPersonId: 'person-safe-1'
+        }
+      }
+    ]);
+  });
 });
 
 describe('assessment workflow isolation', () => {
@@ -477,12 +668,14 @@ function fakeTaskClient({
   people = [],
   tasks = [],
   taskTargets = [],
-  persistTaskTargets = true
+  persistTaskTargets = true,
+  createFailures = {}
 } = {}) {
   return {
     people: [...people],
     tasks: [...tasks],
     taskTargets: [...taskTargets],
+    createFailures,
     created: [],
     updated: [],
     async listAllRecords(objectPlural) {
@@ -520,6 +713,12 @@ function fakeTaskClient({
       return null;
     },
     async createRecord(objectPlural, payload) {
+      const failure = consumeFailure(this.createFailures, objectPlural);
+
+      if (failure) {
+        throw failure;
+      }
+
       this.created.push({
         objectPlural,
         payload
@@ -580,6 +779,28 @@ function fakeTaskClient({
       };
     }
   };
+}
+
+function consumeFailure(failures, objectPlural) {
+  const failure = failures[objectPlural];
+
+  if (Array.isArray(failure)) {
+    return failure.shift() ?? null;
+  }
+
+  return failure ?? null;
+}
+
+function httpError(status, message, { retryAfter } = {}) {
+  const error = new Error(message);
+  error.response = {
+    status,
+    data: {
+      message
+    },
+    headers: retryAfter === undefined ? {} : { 'retry-after': String(retryAfter) }
+  };
+  return error;
 }
 
 function fakeOperationalStore() {

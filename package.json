@@ -30,6 +30,7 @@
     "queues:plan-sent-initial-follow-ups": "node scripts/planSentInitialFollowUps.js",
     "queues:apply-missing-next-tasks": "node scripts/applyMissingNextTasks.js",
     "queues:apply-sent-initial-follow-ups": "node scripts/applySentInitialFollowUps.js",
+    "queues:recover-sent-initial-follow-ups": "node scripts/recoverSentInitialFollowUps.js",
     "legacy:tasks:apply": "node scripts/applyLegacyTaskRetrofit.js",
     "legacy:owners:plan": "node scripts/planLegacyOwnerCleanup.js",
     "legacy:owners:apply": "node scripts/applyLegacyOwnerCleanup.js"

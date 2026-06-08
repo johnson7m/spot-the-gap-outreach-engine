@@ -48,7 +48,8 @@ export async function applySentInitialFollowUpPlan({
   restClient,
   operationalStore,
   log,
-  now = new Date()
+  now = new Date(),
+  sleep = defaultSleep
 } = {}) {
   const normalizedOptions = normalizeSentInitialFollowUpApplyOptions(options);
   const liveEnabled = Boolean(normalizedOptions.applyEnabled && normalizedOptions.liveTest);
@@ -85,6 +86,15 @@ export async function applySentInitialFollowUpPlan({
         verificationFailed: 0,
         skipped: operations.filter((operation) => operation.status === 'skipped').length
       }),
+      retryAfterSeconds: null,
+      recommendedNextCommand: buildRecommendedNextCommand({
+        summary: {
+          failed: 0,
+          verificationFailed: 0,
+          skipped: operations.filter((operation) => operation.status === 'skipped').length
+        },
+        options: normalizedOptions
+      }),
       operations,
       warnings: [
         'Sent-initial follow-up apply is in dry-run mode. Set SENT_INITIAL_FOLLOW_UP_APPLY_ENABLED=true, LIVE_TEST=true, and SENT_INITIAL_FOLLOW_UP_BATCH_SIZE to create Tasks.'
@@ -103,7 +113,7 @@ export async function applySentInitialFollowUpPlan({
   const results = [];
   let consecutiveFailures = 0;
 
-  for (const operation of operations) {
+  for (const [index, operation] of operations.entries()) {
     if (operation.status === 'skipped') {
       results.push(operation);
       continue;
@@ -116,6 +126,10 @@ export async function applySentInitialFollowUpPlan({
         skippedReason: 'Stopped after repeated failures.'
       });
       continue;
+    }
+
+    if (index > 0 && normalizedOptions.writeDelayMs > 0) {
+      await sleep(normalizedOptions.writeDelayMs);
     }
 
     const startedAt = new Date().toISOString();
@@ -131,18 +145,20 @@ export async function applySentInitialFollowUpPlan({
     });
 
     try {
-      const openFollowUp = await findOpenPostInitialFollowUpTaskForPerson({
+      const operationResult = await executeSentInitialFollowUpOperationWithRetry({
         client,
-        personId: operation.personId
+        operation,
+        options: normalizedOptions,
+        sleep
       });
 
-      if (openFollowUp) {
+      if (operationResult.skippedReason) {
         const audit = await store.appendCrmSyncLog({
           ...auditBase,
           status: 'skipped',
           responsePayload: {
-            skippedReason: 'Open post-initial follow-up Task already exists for Person.',
-            existingTask: summarizeTask(openFollowUp)
+            skippedReason: operationResult.skippedReason,
+            existingTask: operationResult.existingTask
           },
           finishedAt: new Date().toISOString()
         });
@@ -151,8 +167,8 @@ export async function applySentInitialFollowUpPlan({
           status: 'cancelled',
           payload: {
             ...eventBase.payload,
-            skippedReason: 'Open post-initial follow-up Task already exists for Person.',
-            existingTaskId: openFollowUp.id
+            skippedReason: operationResult.skippedReason,
+            existingTaskId: operationResult.existingTask?.id ?? null
           }
         });
 
@@ -160,43 +176,26 @@ export async function applySentInitialFollowUpPlan({
         results.push({
           ...operation,
           status: 'skipped',
-          skippedReason: 'Open post-initial follow-up Task already exists for Person.',
-          existingTask: summarizeTask(openFollowUp),
+          skippedReason: operationResult.skippedReason,
+          existingTask: operationResult.existingTask,
+          retryAttempts: operationResult.retryAttempts,
+          retryAfterSeconds: operationResult.retryAfterSeconds,
           audit,
           outboundEvent
         });
         continue;
       }
 
-      const existingTask = await findExistingTaskByDedupeKey({
-        client,
-        dedupeKey: operation.dedupeKey
-      });
-      const task = existingTask ?? (await client.createRecord('tasks', operation.taskPayload));
-      const personTarget = await createPersonTaskTargetIfMissing({
-        client,
-        operation,
-        taskId: task.id
-      });
-      const companyTarget =
-        operation.companyId && operation.companyTargetEnabled
-          ? await createCompanyTaskTargetIfMissing({
-              client,
-              operation,
-              taskId: task.id
-            })
-          : null;
-      const personStageUpdate = operation.personStageUpdateEnabled
-        ? await updatePersonStageIfEnabled({
-            client,
-            operation
-          })
-        : null;
-      const verification = await verifySentInitialFollowUp({
-        client,
-        operation,
-        taskId: task.id
-      });
+      const {
+        task,
+        personTarget,
+        companyTarget,
+        personStageUpdate,
+        duplicateTaskSkipped,
+        verification,
+        retryAttempts,
+        retryAfterSeconds
+      } = operationResult;
       const succeeded = verification.ok;
       const finishedAt = new Date().toISOString();
       const audit = await store.appendCrmSyncLog({
@@ -207,8 +206,10 @@ export async function applySentInitialFollowUpPlan({
           personTarget,
           companyTarget,
           personStageUpdate,
-          duplicateTaskSkipped: Boolean(existingTask),
-          verification
+          duplicateTaskSkipped,
+          verification,
+          retryAttempts,
+          retryAfterSeconds
         },
         errorPayload: succeeded ? null : verification,
         finishedAt
@@ -222,8 +223,10 @@ export async function applySentInitialFollowUpPlan({
           personTaskTargetId: personTarget?.id ?? null,
           companyTaskTargetId: companyTarget?.id ?? null,
           personStageUpdate,
-          duplicateTaskSkipped: Boolean(existingTask),
-          verification
+          duplicateTaskSkipped,
+          verification,
+          retryAttempts,
+          retryAfterSeconds
         },
         errorPayload: succeeded ? null : verification
       });
@@ -236,14 +239,20 @@ export async function applySentInitialFollowUpPlan({
         personTarget,
         companyTarget,
         personStageUpdate,
-        duplicateTaskSkipped: Boolean(existingTask),
+        duplicateTaskSkipped,
         verification,
+        retryAttempts,
+        retryAfterSeconds,
         audit,
         outboundEvent
       });
     } catch (error) {
       consecutiveFailures += 1;
-      const errorPayload = toErrorPayload(error);
+      const errorPayload = {
+        ...toErrorPayload(error),
+        retryAttempts: error.retryAttempts ?? 0,
+        retryAfterSeconds: error.retryAfterSeconds ?? getRetryAfterSeconds(error, normalizedOptions)
+      };
       const audit = await store.appendCrmSyncLog({
         ...auditBase,
         status: 'failed',
@@ -259,6 +268,8 @@ export async function applySentInitialFollowUpPlan({
       results.push({
         ...operation,
         status: 'failed',
+        retryAttempts: errorPayload.retryAttempts,
+        retryAfterSeconds: errorPayload.retryAfterSeconds,
         error: errorPayload,
         audit,
         outboundEvent
@@ -269,11 +280,16 @@ export async function applySentInitialFollowUpPlan({
   const summary = summarizeSentInitialFollowUpLiveResults(results);
 
   return {
-    status: summary.failed > 0 || summary.verificationFailed > 0 ? 'failed' : 'succeeded',
+    status: determineSentInitialFollowUpStatus(summary),
     dryRun: false,
     liveEnabled: true,
     guard: buildGuardState(normalizedOptions),
     summary,
+    retryAfterSeconds: getMaxRetryAfterSeconds(results),
+    recommendedNextCommand: buildRecommendedNextCommand({
+      summary,
+      options: normalizedOptions
+    }),
     operations: results,
     warnings: config.supabase?.enabled
       ? []
@@ -295,7 +311,11 @@ export function normalizeSentInitialFollowUpApplyOptions(options = {}) {
     force: toBoolean(options.force),
     batchSize: normalizePositiveInt(rawBatchSize, 5),
     batchSizeProvided,
-    offset: normalizeNonNegativeInt(options.offset, 0)
+    offset: normalizeNonNegativeInt(options.offset, 0),
+    writeDelayMs: normalizeNonNegativeInt(options.writeDelayMs, 1500),
+    retryAfter429: options.retryAfter429 === undefined ? true : toBoolean(options.retryAfter429),
+    maxRetryAttempts: normalizeNonNegativeInt(options.maxRetryAttempts, 2),
+    retryFallbackMs: normalizePositiveInt(options.retryFallbackMs, 60000)
   };
 }
 
@@ -343,6 +363,24 @@ export function isEligibleSentInitialFollowUpRecord(record = {}, options = {}) {
   }
 
   return true;
+}
+
+export function buildSentInitialFollowUpRecoveryPlan({ plan = {}, applyOutput = {} } = {}) {
+  const sourcePlans = plan.plans ?? [];
+  const plansByPersonId = new Map(sourcePlans.map((record) => [String(record.personId), record]));
+  const recoverableOperations = (applyOutput.operations ?? []).filter(isRecoverableApplyOperation);
+  const plans = recoverableOperations
+    .map((operation) => plansByPersonId.get(String(operation.personId)) ?? operationToPlanRecord(operation))
+    .filter(Boolean);
+
+  return {
+    status: 'recovery_plan',
+    dryRun: true,
+    sourceApplyStatus: applyOutput.status ?? null,
+    sourceSummary: applyOutput.summary ?? null,
+    recoverableOperationCount: recoverableOperations.length,
+    plans
+  };
 }
 
 export function buildSentInitialFollowUpOperation({
@@ -415,6 +453,47 @@ export function buildSentInitialFollowUpOperation({
     skippedReason,
     taskPayload,
     generatedAt: now.toISOString()
+  };
+}
+
+function isRecoverableApplyOperation(operation = {}) {
+  if (['failed', 'verification_failed'].includes(operation.status)) {
+    return true;
+  }
+
+  return operation.status === 'skipped' && /repeated failures/i.test(operation.skippedReason ?? '');
+}
+
+function operationToPlanRecord(operation = {}) {
+  if (!operation.personId) {
+    return null;
+  }
+
+  return {
+    personId: operation.personId,
+    personName: operation.personName ?? null,
+    owner: operation.taskPayload?.assigneeId
+      ? {
+          id: operation.taskPayload.assigneeId,
+          workspaceMemberId: operation.taskPayload.assigneeId
+        }
+      : null,
+    cadenceName: operation.cadenceName,
+    cadenceStage: operation.oldCadenceStage ?? operation.cadenceStage,
+    recommendedNextCadenceStage: operation.recommendedNextCadenceStage,
+    latestTouchStatus: operation.latestTouchStatus,
+    currentInitialTaskId: operation.currentInitialTaskId ?? null,
+    recommendedTaskTitle: operation.recommendedTaskTitle,
+    recommendedDueDate: operation.recommendedDueDate,
+    originalRecommendedDueDate: operation.originalRecommendedDueDate ?? null,
+    dueDateAdjusted: Boolean(operation.dueDateAdjusted),
+    dueDateAdjustmentReason: operation.dueDateAdjustmentReason ?? null,
+    recommendedTaskType: operation.recommendedTaskType,
+    safeToCreate: true,
+    isTestRecord: false,
+    testRecordReasons: [],
+    evidence: ['Recovered from latest sent-initial follow-up apply output.'],
+    warnings: []
   };
 }
 
@@ -518,6 +597,98 @@ async function updatePersonStageIfEnabled({ client, operation }) {
   }
 
   return client.updateRecord('people', operation.personId, operation.personStagePayload);
+}
+
+async function executeSentInitialFollowUpOperationWithRetry({
+  client,
+  operation,
+  options,
+  sleep
+}) {
+  let attempt = 0;
+  let lastRetryAfterSeconds = null;
+
+  while (true) {
+    try {
+      const result = await executeSentInitialFollowUpOperation({
+        client,
+        operation
+      });
+
+      return {
+        ...result,
+        retryAttempts: attempt,
+        retryAfterSeconds: lastRetryAfterSeconds
+      };
+    } catch (error) {
+      if (!shouldRetryTwentyError(error, options) || attempt >= options.maxRetryAttempts) {
+        error.retryAttempts = attempt;
+        error.retryAfterSeconds = lastRetryAfterSeconds ?? getRetryAfterSeconds(error, options);
+        throw error;
+      }
+
+      attempt += 1;
+      const retryAfterSeconds = getRetryAfterSeconds(error, options);
+      lastRetryAfterSeconds = retryAfterSeconds;
+      await sleep(retryAfterSeconds * 1000);
+    }
+  }
+}
+
+async function executeSentInitialFollowUpOperation({ client, operation }) {
+  const existingTask = await findExistingTaskByDedupeKey({
+    client,
+    dedupeKey: operation.dedupeKey
+  });
+
+  if (!existingTask) {
+    const openFollowUp = await findOpenPostInitialFollowUpTaskForPerson({
+      client,
+      personId: operation.personId
+    });
+
+    if (openFollowUp) {
+      return {
+        skippedReason: 'Open post-initial follow-up Task already exists for Person.',
+        existingTask: summarizeTask(openFollowUp)
+      };
+    }
+  }
+
+  const task = existingTask ?? (await client.createRecord('tasks', operation.taskPayload));
+  const personTarget = await createPersonTaskTargetIfMissing({
+    client,
+    operation,
+    taskId: task.id
+  });
+  const companyTarget =
+    operation.companyId && operation.companyTargetEnabled
+      ? await createCompanyTaskTargetIfMissing({
+          client,
+          operation,
+          taskId: task.id
+        })
+      : null;
+  const personStageUpdate = operation.personStageUpdateEnabled
+    ? await updatePersonStageIfEnabled({
+        client,
+        operation
+      })
+    : null;
+  const verification = await verifySentInitialFollowUp({
+    client,
+    operation,
+    taskId: task.id
+  });
+
+  return {
+    task,
+    personTarget,
+    companyTarget,
+    personStageUpdate,
+    duplicateTaskSkipped: Boolean(existingTask),
+    verification
+  };
 }
 
 async function verifySentInitialFollowUp({ client, operation, taskId }) {
@@ -769,10 +940,83 @@ function buildGuardState(options) {
     includeReview: options.includeReview,
     includeTestRecords: options.includeTestRecords,
     force: options.force,
+    writeDelayMs: options.writeDelayMs,
+    retryAfter429: options.retryAfter429,
+    maxRetryAttempts: options.maxRetryAttempts,
+    retryFallbackMs: options.retryFallbackMs,
     batchSize: options.batchSize,
     batchSizeProvided: options.batchSizeProvided,
     offset: options.offset
   };
+}
+
+function determineSentInitialFollowUpStatus(summary = {}) {
+  const failed = (summary.failed ?? 0) + (summary.verificationFailed ?? 0);
+  const succeeded = summary.succeeded ?? 0;
+
+  if (failed > 0 && succeeded > 0) {
+    return 'partial_success';
+  }
+
+  if (failed > 0) {
+    return 'failed';
+  }
+
+  return 'succeeded';
+}
+
+function buildRecommendedNextCommand({ summary = {}, options = {} } = {}) {
+  const failed = (summary.failed ?? 0) + (summary.verificationFailed ?? 0);
+
+  if (failed > 0) {
+    return 'SENT_INITIAL_FOLLOW_UP_APPLY_ENABLED=true LIVE_TEST=true npm run queues:recover-sent-initial-follow-ups';
+  }
+
+  const nextOffset = (options.offset ?? 0) + (options.batchSize ?? 0);
+
+  return `SENT_INITIAL_FOLLOW_UP_APPLY_ENABLED=true LIVE_TEST=true SENT_INITIAL_FOLLOW_UP_BATCH_SIZE=${options.batchSize ?? 10} SENT_INITIAL_FOLLOW_UP_OFFSET=${nextOffset} npm run queues:apply-sent-initial-follow-ups`;
+}
+
+function getMaxRetryAfterSeconds(results = []) {
+  const values = results
+    .map((result) => result.retryAfterSeconds ?? result.error?.retryAfterSeconds)
+    .filter((value) => Number.isFinite(Number(value)))
+    .map(Number);
+
+  return values.length > 0 ? Math.max(...values) : null;
+}
+
+function shouldRetryTwentyError(error, options = {}) {
+  const status = getHttpStatus(error);
+
+  if (status === 429 && options.retryAfter429) {
+    return true;
+  }
+
+  return [502, 503, 504].includes(status);
+}
+
+function getRetryAfterSeconds(error, options = {}) {
+  const headerValue =
+    error?.twentyDiagnostics?.headers?.['retry-after'] ??
+    error?.twentyDiagnostics?.headers?.['Retry-After'] ??
+    error?.response?.headers?.['retry-after'] ??
+    error?.response?.headers?.['Retry-After'];
+  const parsedHeader = Number(headerValue);
+
+  if (Number.isFinite(parsedHeader) && parsedHeader > 0) {
+    return parsedHeader;
+  }
+
+  return Math.max(1, Math.ceil((options.retryFallbackMs ?? 60000) / 1000));
+}
+
+function getHttpStatus(error) {
+  return Number(error?.twentyDiagnostics?.httpStatus ?? error?.response?.status ?? error?.httpStatus);
+}
+
+function defaultSleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function isExcludedRecordState(record = {}) {

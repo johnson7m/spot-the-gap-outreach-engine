@@ -813,6 +813,16 @@ Missing next-task operations:
   the Person through `taskTargets`, and does not modify the old initial Task.
   Person `cadenceStage` updates remain disabled unless
   `SENT_INITIAL_FOLLOW_UP_UPDATE_PERSON_STAGE=true`.
+- Sent-initial apply is paced with
+  `SENT_INITIAL_FOLLOW_UP_WRITE_DELAY_MS` and retries Twenty 429 responses
+  when `SENT_INITIAL_FOLLOW_UP_RETRY_AFTER_429=true`. Script output includes
+  `retryAfterSeconds`, `status=partial_success` when mixed results occur, and
+  `recommendedNextCommand`.
+- `npm run queues:recover-sent-initial-follow-ups` is the recovery command for
+  partially successful batches. It reads
+  `data/sent-initial-follow-up-apply-latest.json`, rechecks dedupe keys and
+  `taskTargets`, and writes only missing recovery operations when live guards
+  are enabled.
 
 ## POST /api/tasks/:id/complete
 

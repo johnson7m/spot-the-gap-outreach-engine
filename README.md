@@ -312,6 +312,12 @@ Live sent-initial follow-up creation requires an explicit batch:
 SENT_INITIAL_FOLLOW_UP_APPLY_ENABLED=true LIVE_TEST=true SENT_INITIAL_FOLLOW_UP_BATCH_SIZE=10 SENT_INITIAL_FOLLOW_UP_OFFSET=0 npm run queues:apply-sent-initial-follow-ups
 ```
 
+Recover retryable failures from the latest apply output:
+
+```bash
+npm run queues:recover-sent-initial-follow-ups
+```
+
 Sent-initial apply rules:
 
 - reads local `data/sent-initial-follow-up-plan.json` by default
@@ -326,6 +332,16 @@ Sent-initial apply rules:
   `SENT_INITIAL_FOLLOW_UP_UPDATE_PERSON_STAGE=true`
 - optional Company taskTarget linking remains off unless
   `SENT_INITIAL_FOLLOW_UP_LINK_COMPANY=true`
+- waits `SENT_INITIAL_FOLLOW_UP_WRITE_DELAY_MS` between live operations
+  by default
+- retries Twenty 429 responses when
+  `SENT_INITIAL_FOLLOW_UP_RETRY_AFTER_429=true`, respecting `retry-after`
+  when present and otherwise using
+  `SENT_INITIAL_FOLLOW_UP_429_FALLBACK_DELAY_MS`
+- writes the latest apply output to
+  `data/sent-initial-follow-up-apply-latest.json`
+- recovery rechecks the dedupe key and existing `taskTargets` before writing,
+  so partially successful operations can be resumed without duplicate Tasks
 
 Apply rules:
 

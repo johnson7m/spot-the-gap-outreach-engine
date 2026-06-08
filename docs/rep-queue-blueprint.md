@@ -211,6 +211,14 @@ Missing next-task planning:
   `taskTarget`, verifies the link, and writes audit/event rows. It does not
   modify old initial Tasks or update Person cadence stage unless
   `SENT_INITIAL_FOLLOW_UP_UPDATE_PERSON_STAGE=true`.
+- Sent-initial apply paces live writes with
+  `SENT_INITIAL_FOLLOW_UP_WRITE_DELAY_MS` and retries Twenty 429 responses
+  before marking an operation failed. Partial batches return
+  `partial_success` with a recommended recovery command.
+- `npm run queues:recover-sent-initial-follow-ups` resumes failed or
+  verification-failed sent-initial operations from the latest apply output. It
+  rechecks dedupe markers and existing `taskTargets` so it does not duplicate
+  Tasks already created during a partially successful batch.
 
 Queue classification diagnostics:
 
