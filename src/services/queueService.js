@@ -280,6 +280,78 @@ export function buildQueueClassificationDiagnostics({
   };
 }
 
+export function buildQueueCoverageAudit({
+  people = [],
+  companies = [],
+  tasks = [],
+  taskTargets = [],
+  workspaceMembers = [],
+  query = {},
+  now = new Date()
+} = {}) {
+  const normalizedQuery = normalizeQueueQuery(
+    {
+      ...query,
+      includeDiagnostics: true,
+      includeTestRecords: true,
+      ownerScope: 'all',
+      assigneeScope: 'all'
+    },
+    { role: 'admin' }
+  );
+  const workspaceMembersById = createWorkspaceMemberIndex(workspaceMembers);
+  const companiesById = createCompanyIndex(companies);
+  const taskTargetsByTaskId = groupTaskTargetsByTaskId(taskTargets);
+  const normalizedTasks = tasks.map((task) =>
+    normalizeTaskRecord({
+      task,
+      taskTargets: taskTargetsByTaskId.get(String(task.id ?? '')) ?? [],
+      people,
+      workspaceMembersById
+    })
+  );
+  const tasksByPersonId = groupTasksByPersonId(normalizedTasks);
+  const normalizedPeople = people.map((person) =>
+    normalizePersonRecord({
+      person,
+      tasks: tasksByPersonId.get(String(person.id ?? '')) ?? [],
+      companiesById,
+      workspaceMembersById
+    })
+  );
+  const hiddenTestPersonIds = new Set(
+    normalizedPeople.filter((person) => person.isTestRecord).map((person) => person.personId)
+  );
+  const visiblePeople = normalizedPeople.filter((person) => !person.isTestRecord);
+  const candidateMap = buildPersonQueueCandidateMap({
+    people: visiblePeople,
+    tasks: normalizedTasks,
+    tasksByPersonId,
+    hiddenTestPersonIds,
+    query: normalizedQuery,
+    now
+  });
+  const records = normalizedPeople.map((person) =>
+    buildCoverageRecord({
+      person,
+      candidate: candidateMap.get(person.personId),
+      tasks: tasksByPersonId.get(person.personId) ?? [],
+      now
+    })
+  );
+  const summary = summarizeCoverageRecords(records);
+
+  return {
+    generatedAt: now.toISOString(),
+    query: {
+      dueBefore: normalizedQuery.dueBefore?.toISOString?.() ?? null,
+      includeTestRecords: true
+    },
+    summary,
+    records
+  };
+}
+
 function toClassificationDiagnosticRow({ person, task, tasks = [], diagnostic, now = new Date() }) {
   const taskList = tasks.length > 0 ? tasks : task ? [task] : [];
   const stale = getStaleRecoveryMatch(person, now, task);
@@ -310,6 +382,267 @@ function toClassificationDiagnosticRow({ person, task, tasks = [], diagnostic, n
       .filter(Boolean),
     classificationReasons: diagnostic.classificationReasons
   };
+}
+
+function buildPersonQueueCandidateMap({
+  people = [],
+  tasks = [],
+  tasksByPersonId = new Map(),
+  hiddenTestPersonIds = new Set(),
+  query = {},
+  now = new Date()
+} = {}) {
+  const candidateMap = new Map();
+
+  for (const queueSlug of [
+    'fresh-leads',
+    'follow-ups',
+    'warm-assessments',
+    'stale-recovery',
+    'pipeline-review'
+  ]) {
+    const warnings = [];
+    const items = selectQueueCandidates({
+      queueSlug,
+      people,
+      tasks,
+      tasksByPersonId,
+      hiddenTestPersonIds,
+      query,
+      warnings,
+      now
+    });
+
+    for (const item of items) {
+      if (!item.personId) {
+        continue;
+      }
+
+      const existing = candidateMap.get(item.personId) ?? {
+        matchedQueueCandidates: new Set(),
+        itemsByQueue: new Map()
+      };
+      existing.matchedQueueCandidates.add(queueSlug);
+
+      const queueItems = existing.itemsByQueue.get(queueSlug) ?? [];
+      queueItems.push(item);
+      existing.itemsByQueue.set(queueSlug, queueItems);
+      candidateMap.set(item.personId, existing);
+    }
+  }
+
+  return candidateMap;
+}
+
+function buildCoverageRecord({ person, candidate, tasks = [], now = new Date() }) {
+  if (person.isTestRecord) {
+    return {
+      ...coverageBaseRecord(person),
+      matchedQueueCandidates: [],
+      finalQueue: 'hidden_test_record',
+      disposition: 'hidden_test_record',
+      exclusionReasons: person.testRecordReasons,
+      recommendedFix: 'exclude_test_record_from_operational_queues'
+    };
+  }
+
+  const matchedQueueCandidates = uniqueStrings([...(candidate?.matchedQueueCandidates ?? [])]);
+  const terminalDisposition = getTerminalDisposition(person);
+  const finalQueue = terminalDisposition ? null : pickFinalQueue(matchedQueueCandidates);
+  const finalDisposition = finalQueue ? dispositionForQueue(finalQueue) : terminalDisposition;
+  const pipelineItem = candidate?.itemsByQueue?.get('pipeline-review')?.[0] ?? null;
+  const exclusionReasons = buildCoverageExclusionReasons({
+    person,
+    tasks,
+    finalQueue,
+    disposition: finalDisposition,
+    pipelineItem
+  });
+  const recommendedFix = getCoverageRecommendedFix({
+    person,
+    tasks,
+    finalQueue,
+    disposition: finalDisposition,
+    pipelineItem,
+    now
+  });
+
+  return {
+    ...coverageBaseRecord(person),
+    matchedQueueCandidates,
+    finalQueue: finalQueue ?? finalDisposition ?? 'unclassified_needs_rule',
+    disposition: finalDisposition ?? 'unclassified_needs_rule',
+    exclusionReasons,
+    recommendedFix
+  };
+}
+
+function coverageBaseRecord(person) {
+  return {
+    personId: person.personId,
+    personName: person.name,
+    owner: person.owner
+      ? {
+          id: person.owner.id ?? null,
+          name: person.owner.name ?? null,
+          email: person.owner.email ?? null,
+          workspaceMemberId: person.owner.workspaceMemberId ?? null
+        }
+      : null,
+    outboundPipelineType: person.outboundPipelineType || null,
+    cadenceName: person.cadenceName || null,
+    cadenceStage: person.cadenceStage || null,
+    latestTouchStatus: person.latestTouchStatus || null,
+    staleRisk: person.staleRisk || null
+  };
+}
+
+function dispositionForQueue(queueSlug) {
+  return {
+    'fresh-leads': 'fresh_lead',
+    'follow-ups': 'follow_up',
+    'warm-assessments': 'warm_assessment',
+    'stale-recovery': 'stale_recovery',
+    'pipeline-review': 'pipeline_review'
+  }[queueSlug] ?? null;
+}
+
+function getTerminalDisposition(person = {}) {
+  if (person.leadStage === 'ACTIVE_CLIENT' || person.cadenceStage === 'ACTIVE_CLIENT') {
+    return 'active_client';
+  }
+
+  if (
+    person.leadStage === 'UNQUALIFIED_CLOSED' ||
+    person.leadStage === 'DISQUALIFIED' ||
+    person.cadenceStage === 'UNQUALIFIED_CLOSED' ||
+    isTerminalCadenceStage(person.cadenceStage)
+  ) {
+    return 'terminal_closed';
+  }
+
+  return null;
+}
+
+function buildCoverageExclusionReasons({
+  person,
+  tasks = [],
+  finalQueue,
+  disposition,
+  pipelineItem
+} = {}) {
+  if (disposition === 'hidden_test_record') {
+    return person.testRecordReasons ?? ['test_record'];
+  }
+
+  if (finalQueue === 'pipeline-review') {
+    const reviewReasons = pipelineItem?.reviewReasons ?? [];
+    return reviewReasons.length > 0 ? uniqueStrings(reviewReasons) : ['manual_review'];
+  }
+
+  if (disposition === 'terminal_closed') {
+    return ['terminal'];
+  }
+
+  if (disposition === 'active_client') {
+    return ['active_client'];
+  }
+
+  if (finalQueue) {
+    return [];
+  }
+
+  const review = getPipelineReview(person, firstOpenTask(tasks), tasks);
+  const reasons = [...review.reasons];
+
+  if (!person.outboundPipelineType || !person.cadenceName || !person.cadenceStage) {
+    reasons.push('missing_outbound_fields');
+  }
+
+  if (person.cadenceName && !isTerminalCadenceStage(person.cadenceStage) && !firstOpenTask(tasks)) {
+    reasons.push('missing_task');
+  }
+
+  if (reasons.length === 0) {
+    reasons.push('no_action_rule_missing');
+  }
+
+  return uniqueStrings(reasons);
+}
+
+function getCoverageRecommendedFix({
+  person,
+  tasks = [],
+  finalQueue,
+  disposition,
+  pipelineItem,
+  now = new Date()
+} = {}) {
+  if (pipelineItem?.suggestedResolutionActions?.length > 0) {
+    return pipelineItem.suggestedResolutionActions[0];
+  }
+
+  if (disposition === 'terminal_closed') {
+    return 'no_active_queue_terminal_closed';
+  }
+
+  if (disposition === 'active_client') {
+    return 'no_active_queue_active_client';
+  }
+
+  if (!finalQueue) {
+    return 'define_queue_rule';
+  }
+
+  const task = firstOpenTask(tasks);
+  const diagnostic = buildPairClassificationDiagnostic({
+    person,
+    task,
+    tasks,
+    queueSlug: finalQueue,
+    now
+  });
+
+  return (
+    getRecommendedClassificationFix({ person, task, tasks, diagnostic }) ??
+    (finalQueue === 'pipeline-review' ? 'review_pipeline_gaps' : 'define_queue_rule')
+  );
+}
+
+function summarizeCoverageRecords(records = []) {
+  const totalPeople = records.length;
+  const hiddenTestRecords = records.filter((record) => record.disposition === 'hidden_test_record').length;
+  const expectedRealPeople = totalPeople - hiddenTestRecords;
+  const realRecords = records.filter((record) => record.disposition !== 'hidden_test_record');
+  const unclassifiedPeople = realRecords.filter(
+    (record) => record.disposition === 'unclassified_needs_rule'
+  ).length;
+  const duplicateCandidatePeople = realRecords.filter(
+    (record) => (record.matchedQueueCandidates ?? []).length > 1
+  ).length;
+
+  return {
+    totalPeople,
+    hiddenTestRecords,
+    expectedRealPeople,
+    accountedForPeople: expectedRealPeople - unclassifiedPeople,
+    unclassifiedPeople,
+    countsByFinalQueue: countBy(records, (record) => record.finalQueue ?? 'none'),
+    countsByDisposition: countBy(records, (record) => record.disposition ?? 'none'),
+    countsByExclusionReason: countBy(
+      realRecords.flatMap((record) => record.exclusionReasons ?? []),
+      (reason) => reason
+    ),
+    duplicateMultiQueueCandidateCount: duplicateCandidatePeople
+  };
+}
+
+function countBy(values = [], selector = (value) => value) {
+  return values.reduce((acc, value) => {
+    const key = selector(value) || 'none';
+    acc[key] = (acc[key] ?? 0) + 1;
+    return acc;
+  }, {});
 }
 
 export function normalizeQueueQuery(query = {}, workspaceUser = {}) {

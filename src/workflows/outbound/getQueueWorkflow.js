@@ -1,5 +1,9 @@
 import { createTwentyQueueDataSource } from '../../integrations/twenty/queueDataSource.js';
-import { buildQueue, normalizeQueueQuery } from '../../services/queueService.js';
+import {
+  buildQueue,
+  buildQueueCoverageAudit,
+  normalizeQueueQuery
+} from '../../services/queueService.js';
 
 export async function getOutboundQueueWorkflow({
   queueSlug,
@@ -146,6 +150,12 @@ export async function getOutboundQueueSummaryWorkflow({
       counts: null,
       overdueTasksByQueue: null,
       hiddenTestRecords: null,
+      totalPeople: null,
+      expectedRealPeople: null,
+      accountedForPeople: null,
+      unclassifiedPeople: null,
+      countsByDisposition: null,
+      countsByFinalQueue: null,
       diagnostics: {
         timelinePaginationWarning: warningBuckets.timelinePaginationWarning,
         queueReadStatus: readStatus,
@@ -183,6 +193,15 @@ export async function getOutboundQueueSummaryWorkflow({
       })
     ])
   );
+  const coverage = buildQueueCoverageAudit({
+    people: records.people,
+    companies: records.companies,
+    tasks: records.tasks,
+    taskTargets: records.taskTargets,
+    workspaceMembers: records.workspaceMembers,
+    query: normalizedQuery,
+    now
+  });
 
   return {
     status: readStatus.status,
@@ -205,11 +224,19 @@ export async function getOutboundQueueSummaryWorkflow({
       pipelineReview: queues['pipeline-review'].overdueCount,
       unassignedTasks: queues['unassigned-tasks'].overdueCount
     },
-    hiddenTestRecords: queues['fresh-leads'].diagnostics?.hiddenTestRecords ?? 0,
+    hiddenTestRecords: coverage.summary.hiddenTestRecords,
+    totalPeople: coverage.summary.totalPeople,
+    expectedRealPeople: coverage.summary.expectedRealPeople,
+    accountedForPeople: coverage.summary.accountedForPeople,
+    unclassifiedPeople: coverage.summary.unclassifiedPeople,
+    countsByDisposition: coverage.summary.countsByDisposition,
+    countsByFinalQueue: coverage.summary.countsByFinalQueue,
     diagnostics: {
       timelinePaginationWarning: warningBuckets.timelinePaginationWarning,
       queueReadStatus: readStatus,
-      staleCacheGuidance: readStatus.staleCacheGuidance
+      staleCacheGuidance: readStatus.staleCacheGuidance,
+      duplicateMultiQueueCandidateCount: coverage.summary.duplicateMultiQueueCandidateCount,
+      countsByExclusionReason: coverage.summary.countsByExclusionReason
     },
     warnings: uniqueStrings([
       ...queueWarnings,

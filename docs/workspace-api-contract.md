@@ -668,6 +668,23 @@ Response data:
     "unassignedTasks": 2
   },
   "hiddenTestRecords": 11,
+  "totalPeople": 324,
+  "expectedRealPeople": 313,
+  "accountedForPeople": 313,
+  "unclassifiedPeople": 0,
+  "countsByDisposition": {
+    "fresh_lead": 92,
+    "follow_up": 87,
+    "pipeline_review": 121,
+    "terminal_closed": 13
+  },
+  "countsByFinalQueue": {
+    "fresh-leads": 92,
+    "follow-ups": 87,
+    "pipeline-review": 121,
+    "terminal_closed": 13,
+    "hidden_test_record": 11
+  },
   "diagnostics": {
     "timelinePaginationWarning": null,
     "queueReadStatus": {
@@ -681,6 +698,29 @@ Response data:
 If a critical Twenty read is rate-limited, summary returns
 `status="degraded_rate_limited"`, `isPartial=true`, `counts=null`,
 `overdueTasksByQueue=null`, and `retryAfterSeconds` when available.
+
+People coverage fields:
+
+- `totalPeople`: all Twenty People fetched.
+- `hiddenTestRecords`: People suppressed from normal queues by test-record
+  detection.
+- `expectedRealPeople`: `totalPeople - hiddenTestRecords`.
+- `accountedForPeople`: non-test People with an explicit queue or non-work
+  disposition.
+- `unclassifiedPeople`: non-test People where no current queue or terminal rule
+  applies.
+- `countsByDisposition`: person-level dispositions such as `fresh_lead`,
+  `follow_up`, `warm_assessment`, `stale_recovery`, `pipeline_review`,
+  `terminal_closed`, `active_client`, and `unclassified_needs_rule`.
+- `countsByFinalQueue`: final queue/precedence bucket, including pseudo-buckets
+  such as `terminal_closed`, `active_client`, and `hidden_test_record`.
+
+Run `npm run queues:coverage-audit` for the full per-Person report. The audit
+writes `data/queue-coverage-audit.json` and
+`data/queue-coverage-summary.md`. Pipeline Review-only records include
+`exclusionReasons` so the workspace can explain whether they are missing
+outbound fields, company/email data, a next task, manual review, normalization,
+or a new queue rule.
 
 Fresh Leads criteria:
 

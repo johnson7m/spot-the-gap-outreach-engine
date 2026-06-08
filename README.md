@@ -510,7 +510,27 @@ Queue pagination:
   workspace list views.
 - `overdueCount` counts overdue tasks within the full matching queue.
 - `GET /api/queues/summary` returns all queue counts, overdue counts by queue,
-  hidden test record count, and degraded/rate-limit status.
+  hidden test record count, people coverage counts, and degraded/rate-limit
+  status.
+- `npm run queues:coverage-audit` writes
+  `data/queue-coverage-audit.json` and `data/queue-coverage-summary.md` so we
+  can confirm every non-test Person has an explicit disposition.
+
+Queue coverage audit dispositions:
+
+- `fresh_lead`
+- `follow_up`
+- `warm_assessment`
+- `stale_recovery`
+- `pipeline_review`
+- `terminal_closed`
+- `active_client`
+- `unclassified_needs_rule`
+- `hidden_test_record`
+
+The audit explains Pipeline Review-only records with explicit reasons such as
+`missing_outbound_fields`, `missing_company`, `missing_email`, `missing_task`,
+`ready_for_normalization`, `manual_review`, or `no_action_rule_missing`.
 
 Fresh vs Follow-Up classification:
 

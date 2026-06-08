@@ -241,7 +241,10 @@ Pagination/count contract:
   workspace UI
 - `overdueCount`: total overdue Tasks in the full matching queue
 - `GET /api/queues/summary`: all queue counts, overdue counts by queue, hidden
-  test count, and degraded/rate-limit state
+  test count, global people coverage counts, disposition counts, final queue
+  counts, and degraded/rate-limit state
+- `npm run queues:coverage-audit`: read-only coverage audit that writes
+  `data/queue-coverage-audit.json` and `data/queue-coverage-summary.md`
 
 Unassigned Tasks:
 
@@ -288,6 +291,18 @@ Pipeline Review:
   `needs_manual_normalization`, `ready_for_normalization`,
   `company_relation_unresolved`, `enrichment_partial`, `missing_next_task`,
   `test_record`, and `manual_review`
+
+Queue coverage audit:
+
+- Every Person receives one explicit disposition:
+  `fresh_lead`, `follow_up`, `warm_assessment`, `stale_recovery`,
+  `pipeline_review`, `terminal_closed`, `active_client`,
+  `unclassified_needs_rule`, or `hidden_test_record`.
+- Hidden test records are excluded from `expectedRealPeople`.
+- `accountedForPeople` is `expectedRealPeople - unclassifiedPeople`.
+- Pipeline Review-only records carry explicit `exclusionReasons` so the team can
+  see whether the person needs normalization, enrichment, a missing task, manual
+  review, or a new queue rule.
 
 Manual lead normalization diagnostics:
 

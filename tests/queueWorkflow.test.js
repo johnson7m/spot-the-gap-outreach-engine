@@ -6,7 +6,10 @@ import {
   createTwentyQueueDataSource
 } from '../src/integrations/twenty/queueDataSource.js';
 import { handleQueueFetch, handleQueueSummaryFetch } from '../src/routes/api/queueRoutes.js';
-import { buildQueueClassificationDiagnostics } from '../src/services/queueService.js';
+import {
+  buildQueueClassificationDiagnostics,
+  buildQueueCoverageAudit
+} from '../src/services/queueService.js';
 import { processAssessmentSubmission } from '../src/workflows/assessmentWorkflow.js';
 import { getOutboundQueueWorkflow } from '../src/workflows/outbound/getQueueWorkflow.js';
 import { buildMissingNextTaskPlans } from '../src/workflows/outbound/missingNextTaskPlanner.js';
@@ -1079,6 +1082,172 @@ describe('outbound queue workflow', () => {
     });
   });
 
+  it('assigns every non-test Person an explicit coverage disposition', () => {
+    const audit = buildQueueCoverageAudit({
+      people: [
+        queueLead('people-coverage-fresh', {
+          cadenceStage: 'CONNECTION_REQUEST',
+          latestTouchStatus: 'DRAFTED'
+        }),
+        queueLead('people-coverage-follow', {
+          cadenceStage: 'INTRO_MESSAGE',
+          latestTouchStatus: 'SENT'
+        }),
+        queueLead('people-coverage-warm', {
+          assessmentCompleted: true,
+          leadstageAuto: 'ASSESSMENT_COMPLETED'
+        }),
+        queueLead('people-coverage-stale', {
+          cadenceStage: 'VALUE_TOUCH',
+          latestTouchStatus: 'NO_RESPONSE',
+          staleRisk: 'STALE'
+        }),
+        queueLead('people-coverage-review', {
+          emails: {
+            primaryEmail: ''
+          },
+          linkedinLink: null,
+          enrichmentStatus: 'PARTIAL',
+          latestTouchStatus: 'RESPONDED'
+        }),
+        queueLead('people-coverage-closed', {
+          cadenceStage: 'COMPLETED',
+          latestTouchStatus: 'COMPLETED'
+        }),
+        queueLead('people-coverage-client', {
+          leadStage: 'ACTIVE_CLIENT',
+          cadenceStage: 'ACTIVE_CLIENT'
+        }),
+        {
+          ...queueLead('people-coverage-test'),
+          name: {
+            firstName: 'Webhook',
+            lastName: 'Test'
+          },
+          emails: {
+            primaryEmail: 'coverage-test@example.com'
+          }
+        }
+      ],
+      tasks: [
+        queueTask('tasks-coverage-fresh', {
+          personId: 'people-coverage-fresh',
+          title: 'Send relationship-oriented connection request'
+        }),
+        queueTask('tasks-coverage-follow', {
+          personId: 'people-coverage-follow',
+          title: 'Send contextual introduction',
+          bodyV2: {
+            markdown: [
+              'Person ID: people-coverage-follow',
+              'Cadence: RELATIONSHIP_BUILDING_V1',
+              'Next cadence stage: INTRO_MESSAGE',
+              'Latest touch status: SENT'
+            ].join('\n')
+          }
+        })
+      ],
+      now: new Date('2026-06-08T15:00:00.000Z')
+    });
+    const byId = Object.fromEntries(audit.records.map((record) => [record.personId, record]));
+
+    expect(audit.summary).toMatchObject({
+      totalPeople: 8,
+      hiddenTestRecords: 1,
+      expectedRealPeople: 7,
+      accountedForPeople: 7,
+      unclassifiedPeople: 0
+    });
+    expect(byId['people-coverage-fresh'].disposition).toBe('fresh_lead');
+    expect(byId['people-coverage-follow'].disposition).toBe('follow_up');
+    expect(byId['people-coverage-warm'].disposition).toBe('warm_assessment');
+    expect(byId['people-coverage-stale'].disposition).toBe('stale_recovery');
+    expect(byId['people-coverage-review'].disposition).toBe('pipeline_review');
+    expect(byId['people-coverage-closed'].disposition).toBe('terminal_closed');
+    expect(byId['people-coverage-client'].disposition).toBe('active_client');
+    expect(byId['people-coverage-test'].disposition).toBe('hidden_test_record');
+  });
+
+  it('counts unclassified People when no queue rule or terminal disposition applies', () => {
+    const audit = buildQueueCoverageAudit({
+      people: [
+        queueLead('people-unclassified', {
+          company: {
+            name: 'Complete Data Co'
+          },
+          emails: {
+            primaryEmail: 'complete@visiblegap.com'
+          },
+          linkedinLink: {
+            primaryLinkUrl: 'https://www.linkedin.com/in/complete-data'
+          },
+          outboundPipelineType: 'RELATIONSHIP_BUILDING',
+          cadenceName: 'RELATIONSHIP_BUILDING_V1',
+          cadenceStage: 'VALUE_TOUCH',
+          latestTouchStatus: 'SENT'
+        })
+      ],
+      tasks: [
+        queueTask('tasks-unclassified-future', {
+          personId: 'people-unclassified',
+          title: 'Administrative placeholder task',
+          dueAt: '2026-06-20',
+          bodyV2: {
+            markdown: [
+              'Person ID: people-unclassified',
+              'Cadence: RELATIONSHIP_BUILDING_V1',
+              'Next cadence stage: VALUE_TOUCH'
+            ].join('\n')
+          }
+        })
+      ],
+      now: new Date('2026-06-08T15:00:00.000Z')
+    });
+
+    expect(audit.summary.unclassifiedPeople).toBe(1);
+    expect(audit.summary.accountedForPeople).toBe(0);
+    expect(audit.records[0]).toMatchObject({
+      disposition: 'unclassified_needs_rule',
+      exclusionReasons: expect.arrayContaining(['no_action_rule_missing']),
+      recommendedFix: 'define_queue_rule'
+    });
+  });
+
+  it('explains Pipeline Review-only People with explicit exclusion reasons', () => {
+    const audit = buildQueueCoverageAudit({
+      people: [
+        queueLead('people-pipeline-only', {
+          emails: {
+            primaryEmail: ''
+          },
+          linkedinLink: null,
+          company: null,
+          outboundPipelineType: '',
+          cadenceName: '',
+          cadenceStage: '',
+          leadStage: 'OUTREACH_INITIATED'
+        })
+      ],
+      tasks: [],
+      now: new Date('2026-06-08T15:00:00.000Z')
+    });
+
+    expect(audit.records[0]).toMatchObject({
+      finalQueue: 'pipeline-review',
+      disposition: 'pipeline_review',
+      matchedQueueCandidates: ['pipeline-review'],
+      exclusionReasons: expect.arrayContaining([
+        'missing_company',
+        'missing_email',
+        'missing_linkedin',
+        'missing_outbound_fields',
+        'needs_manual_normalization',
+        'ready_for_normalization'
+      ]),
+      recommendedFix: 'enrich_company'
+    });
+  });
+
   it('hides obvious test records by default and includes them only when requested', async () => {
     const testPerson = {
       ...queuePeople()[0],
@@ -1978,7 +2147,13 @@ describe('queue summary API', () => {
           freshLeads: expect.any(Number),
           followUps: expect.any(Number)
         },
-        hiddenTestRecords: expect.any(Number)
+        hiddenTestRecords: expect.any(Number),
+        totalPeople: expect.any(Number),
+        expectedRealPeople: expect.any(Number),
+        accountedForPeople: expect.any(Number),
+        unclassifiedPeople: expect.any(Number),
+        countsByDisposition: expect.any(Object),
+        countsByFinalQueue: expect.any(Object)
       },
       errors: []
     });

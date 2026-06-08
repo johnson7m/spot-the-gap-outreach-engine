@@ -52,6 +52,9 @@ Current data strategy:
 - Return `count`, `totalCount`, `limit`, `offset`, `hasMore`, `nextOffset`,
   and `overdueCount` so the workspace can render collapsed, paginated lists.
 - Use `GET /api/queues/summary` for navigation badges and all-queue counts.
+- Use `GET /api/queues/summary` coverage fields and
+  `npm run queues:coverage-audit` to confirm every non-test Person has exactly
+  one final disposition.
 
 ## Fresh Lead Queue
 
@@ -192,6 +195,12 @@ Do not include solely because:
 
 Those records should remain in Fresh Leads, Follow-Ups, Warm Assessments, or
 Pipeline Review with `dueStatus`, `isOverdueTask`, and `overdueDays` metadata.
+
+Pipeline Review can be larger than the active queues because it is also the
+explicit disposition for People that are not ready for rep action yet:
+normalization gaps, enrichment gaps, missing next tasks, manual review records,
+and records where a new queue rule may be needed. The coverage audit separates
+those reasons so Pipeline Review does not become an opaque catch-all.
 
 Legacy task relationship cleanup:
 
