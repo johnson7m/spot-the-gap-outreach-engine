@@ -56,13 +56,13 @@ const POST_INITIAL_TASK_PATTERNS = [
 const FOLLOW_UP_RULES = {
   ASSESSMENT_CAMPAIGN_V1: {
     nextCadenceStage: 'ASSESSMENT_POSITIONING',
-    taskTitle: 'Send assessment positioning message',
+    taskTitle: 'Send assessment positioning follow-up',
     taskType: 'assessment_positioning',
     dueInDays: 1
   },
   RELATIONSHIP_BUILDING_V1: {
     nextCadenceStage: 'INTRO_MESSAGE',
-    taskTitle: 'Send contextual introduction',
+    taskTitle: 'Send relationship follow-up / intro message',
     taskType: 'introduction',
     dueInDays: 2
   }

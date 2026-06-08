@@ -283,9 +283,10 @@ npm run queues:plan-sent-initial-follow-ups
 ```
 
 It writes `data/sent-initial-follow-up-plan.json` and
-`data/sent-initial-follow-up-summary.md`, recommending `INTRO_MESSAGE` for
-relationship cadence records and `ASSESSMENT_POSITIONING` for assessment
-cadence records. It is planning only and performs no writes.
+`data/sent-initial-follow-up-summary.md`, recommending `INTRO_MESSAGE` with
+`Send relationship follow-up / intro message` for relationship cadence records
+and `ASSESSMENT_POSITIONING` with `Send assessment positioning follow-up` for
+assessment cadence records.
 
 Dry-run apply:
 
@@ -298,6 +299,33 @@ Live missing next-task creation requires an explicit batch:
 ```bash
 MISSING_NEXT_TASK_APPLY_ENABLED=true LIVE_TEST=true MISSING_NEXT_TASK_BATCH_SIZE=10 MISSING_NEXT_TASK_OFFSET=0 npm run queues:apply-missing-next-tasks
 ```
+
+Dry-run sent-initial follow-up apply:
+
+```bash
+npm run queues:apply-sent-initial-follow-ups
+```
+
+Live sent-initial follow-up creation requires an explicit batch:
+
+```bash
+SENT_INITIAL_FOLLOW_UP_APPLY_ENABLED=true LIVE_TEST=true SENT_INITIAL_FOLLOW_UP_BATCH_SIZE=10 SENT_INITIAL_FOLLOW_UP_OFFSET=0 npm run queues:apply-sent-initial-follow-ups
+```
+
+Sent-initial apply rules:
+
+- reads local `data/sent-initial-follow-up-plan.json` by default
+- creates Tasks only for `safeToCreate=true` rows
+- skips test records unless `SENT_INITIAL_FOLLOW_UP_INCLUDE_TEST_RECORDS=true`
+- skips review records unless explicitly forced
+- rechecks Twenty for an existing open post-initial follow-up Task before
+  writing
+- creates the Task first, then creates the Person `taskTarget`
+- does not modify the old initial Task
+- does not update Person `cadenceStage` unless
+  `SENT_INITIAL_FOLLOW_UP_UPDATE_PERSON_STAGE=true`
+- optional Company taskTarget linking remains off unless
+  `SENT_INITIAL_FOLLOW_UP_LINK_COMPANY=true`
 
 Apply rules:
 

@@ -364,8 +364,44 @@ The planner writes:
 It finds People where `latestTouchStatus=SENT`,
 `cadenceStage=NOT_STARTED` or `CONNECTION_REQUEST`, and no post-initial open
 follow-up Task exists. Relationship-building records are recommended for
-`INTRO_MESSAGE`; assessment-campaign records are recommended for
-`ASSESSMENT_POSITIONING`.
+`INTRO_MESSAGE` with `Send relationship follow-up / intro message`;
+assessment-campaign records are recommended for `ASSESSMENT_POSITIONING` with
+`Send assessment positioning follow-up`.
+
+Guarded sent-initial follow-up apply path:
+
+```bash
+npm run queues:apply-sent-initial-follow-ups
+```
+
+This command is implemented but remains dry-run unless every live guard is set:
+
+```bash
+SENT_INITIAL_FOLLOW_UP_APPLY_ENABLED=true \
+LIVE_TEST=true \
+SENT_INITIAL_FOLLOW_UP_BATCH_SIZE=10 \
+SENT_INITIAL_FOLLOW_UP_OFFSET=0 \
+npm run queues:apply-sent-initial-follow-ups
+```
+
+Live sent-initial apply rules:
+
+- Reads `SENT_INITIAL_FOLLOW_UP_PLAN_PATH`, default
+  `data/sent-initial-follow-up-plan.json`.
+- Uses only `safeToCreate=true` rows by default.
+- Skips test/synthetic records unless
+  `SENT_INITIAL_FOLLOW_UP_INCLUDE_TEST_RECORDS=true`.
+- Skips review records unless explicitly included and forced.
+- Rechecks Twenty for an open post-initial follow-up Task before writing.
+- Creates the Task first, then creates `taskTargets` with
+  `{ "taskId": "<new-task-id>", "targetPersonId": "<person-id>" }`.
+- Does not modify the old initial Task or mark it complete.
+- Does not update Person `cadenceStage` unless
+  `SENT_INITIAL_FOLLOW_UP_UPDATE_PERSON_STAGE=true`.
+- Optional Company target linking remains disabled unless
+  `SENT_INITIAL_FOLLOW_UP_LINK_COMPANY=true`.
+- Writes `crm_sync_logs` and `outbound_events` with
+  `event_type=sent_initial_follow_up_created` during live apply.
 
 Guarded apply path:
 

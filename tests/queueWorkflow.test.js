@@ -1718,7 +1718,7 @@ describe('sent initial follow-up planner', () => {
       personId: 'people-relationship-sent',
       currentInitialTaskId: 'tasks-relationship-initial',
       recommendedNextCadenceStage: 'INTRO_MESSAGE',
-      recommendedTaskTitle: 'Send contextual introduction',
+      recommendedTaskTitle: 'Send relationship follow-up / intro message',
       recommendedTaskType: 'introduction',
       safeToCreate: true
     });
@@ -1748,7 +1748,7 @@ describe('sent initial follow-up planner', () => {
       personId: 'people-assessment-sent',
       currentInitialTaskId: null,
       recommendedNextCadenceStage: 'ASSESSMENT_POSITIONING',
-      recommendedTaskTitle: 'Send assessment positioning message',
+      recommendedTaskTitle: 'Send assessment positioning follow-up',
       recommendedTaskType: 'assessment_positioning',
       safeToCreate: true
     });

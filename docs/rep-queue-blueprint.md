@@ -198,6 +198,19 @@ Missing next-task planning:
   cadence fields.
 - Company taskTarget links remain optional behind
   `MISSING_NEXT_TASK_LINK_COMPANY=true`.
+- `npm run queues:plan-sent-initial-follow-ups` handles initial-stage People
+  where `latestTouchStatus=SENT` and no post-initial Task exists. It recommends
+  `INTRO_MESSAGE` / `Send relationship follow-up / intro message` for
+  relationship cadence records and `ASSESSMENT_POSITIONING` /
+  `Send assessment positioning follow-up` for assessment cadence records.
+- `npm run queues:apply-sent-initial-follow-ups` is a separate guarded apply
+  path. It is dry-run by default and requires
+  `SENT_INITIAL_FOLLOW_UP_APPLY_ENABLED=true`, `LIVE_TEST=true`, and
+  `SENT_INITIAL_FOLLOW_UP_BATCH_SIZE=<n>` before any Task creation.
+- Sent-initial apply creates only the next follow-up Task, creates a Person
+  `taskTarget`, verifies the link, and writes audit/event rows. It does not
+  modify old initial Tasks or update Person cadence stage unless
+  `SENT_INITIAL_FOLLOW_UP_UPDATE_PERSON_STAGE=true`.
 
 Queue classification diagnostics:
 
