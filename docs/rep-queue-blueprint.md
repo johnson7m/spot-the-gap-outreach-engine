@@ -22,6 +22,7 @@ Current endpoints:
 - `GET /api/queues/stale-recovery`
 - `GET /api/queues/pipeline-review`
 - `GET /api/queues/unassigned-tasks`
+- `GET /api/queues/summary`
 
 All queue endpoints require Supabase workspace JWT auth and role `admin`,
 `operator`, or `rep`. Reps default to `ownerScope=mine`; admins and operators
@@ -48,6 +49,9 @@ Current data strategy:
 - Move broad `timelineActivities` pagination noise into diagnostics metadata
   instead of user-facing queue warnings.
 - Do not write to CRM, Supabase, or assessment records during queue fetches.
+- Return `count`, `totalCount`, `limit`, `offset`, `hasMore`, `nextOffset`,
+  and `overdueCount` so the workspace can render collapsed, paginated lists.
+- Use `GET /api/queues/summary` for navigation badges and all-queue counts.
 
 ## Fresh Lead Queue
 
@@ -86,6 +90,7 @@ Displayed fields:
 - owner
 - recommended first task
 - captured context/reason
+- due status and overdue days when the first-touch Task is overdue
 
 Rep actions:
 
@@ -126,7 +131,7 @@ Inclusion logic:
 
 Priority logic:
 
-- overdue days
+- overdue days, without moving the item to Stale Recovery
 - warm response present
 - assessment completed
 - discovery-ready stage
@@ -141,6 +146,7 @@ Displayed fields:
 - cadence stage
 - owner/assignee
 - queue classification and reasons
+- due status and overdue days
 
 Rep actions:
 
@@ -161,6 +167,31 @@ Task completion behavior:
   and cadence context.
 - Duplicate next tasks are avoided by a dedupe key built from Person ID,
   cadence name, next cadence stage, and task type.
+
+## Stale Recovery Semantics
+
+Stale Recovery is for stalled relationships, not merely overdue work.
+
+Include when:
+
+- `staleRisk=STALE` or `HIGH`
+- explicit stale recovery flag/reason exists
+- `cadenceStage=PAUSED` because outreach stalled/no response
+- `latestTouchStatus=NO_RESPONSE` and `lastOutboundTouchDate` is older than 30
+  days
+- `lastOutboundTouchDate` is older than 30 days and no open actionable Task
+  exists
+- terminal/expired cadence has no response and no next path
+
+Do not include solely because:
+
+- Task due date is today
+- Task due date is overdue
+- `nextOutboundTouchDate` is old
+- a newly generated first-touch or follow-up Task is due now/past
+
+Those records should remain in Fresh Leads, Follow-Ups, Warm Assessments, or
+Pipeline Review with `dueStatus`, `isOverdueTask`, and `overdueDays` metadata.
 
 Legacy task relationship cleanup:
 

@@ -163,6 +163,7 @@ Expected non-blocking warnings include:
 | `Task relationship inference used Company matching only...` | The Task can be associated only through Company context and needs manual review before linking. |
 | `Task target exposes Company but no Person...` | The Task is linked to a Company only. |
 | `No open task exists yet; create the first cadence task.` | Fresh Lead has no open Task and can be queued for first-task creation. |
+| `Initial touch appears sent, but no follow-up task exists.` | The lead should stay out of Fresh Leads and needs a post-initial follow-up task. |
 | `Ownership unavailable...` | Neither owner nor assignee email could be resolved. |
 | `Some queue items do not expose owner or assignee email data from Twenty.` | One or more items could not be scoped confidently for a rep. |
 
@@ -211,6 +212,36 @@ Follow-Ups:
 - `queueClassification` is `follow_up_post_initial_touch` or
   `follow_up_legacy_task_history`; first-touch sent gaps use
   `follow_up_after_initial_sent`
+
+Overdue handling:
+
+- due dates do not change logical queue membership
+- first-touch overdue Tasks remain in Fresh Leads
+- post-initial overdue Tasks remain in Follow-Ups
+- assessment follow-up overdue Tasks remain in Warm Assessments
+- queue items expose `dueStatus`, `isOverdueTask`, and `overdueDays`
+
+Stale Recovery:
+
+- explicit `staleRisk=STALE` or `HIGH`
+- explicit stale recovery flag/reason
+- `cadenceStage=PAUSED` when outreach has stalled or no response was received
+- `latestTouchStatus=NO_RESPONSE` with `lastOutboundTouchDate` older than 30 days
+- `lastOutboundTouchDate` older than 30 days and no open actionable Task exists
+- terminal/expired cadence with no response and no next path
+- every Stale Recovery item includes `staleReason`
+- old `nextOutboundTouchDate`, due-today Tasks, and overdue Tasks do not create
+  Stale Recovery membership by themselves
+
+Pagination/count contract:
+
+- `count`: items returned in the current page
+- `totalCount`: all matching records for the queue after role/test filters
+- `limit`, `offset`, `hasMore`, and `nextOffset`: pagination controls for the
+  workspace UI
+- `overdueCount`: total overdue Tasks in the full matching queue
+- `GET /api/queues/summary`: all queue counts, overdue counts by queue, hidden
+  test count, and degraded/rate-limit state
 
 Unassigned Tasks:
 
@@ -299,6 +330,10 @@ When `includeDiagnostics=true`, queue items also include
 - `finalQueue`
 - `excludedQueues`
 - `classificationReasons`
+- `staleTriggerMatched`
+- `staleReason`
+- `dueStatus`
+- `isOverdueTask`
 - `initialTaskDetected`
 - `firstTouchAlreadySent`
 - `followUpTaskDetected`

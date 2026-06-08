@@ -100,6 +100,7 @@ Implemented endpoints:
 - `GET /api/queues/stale-recovery`
 - `GET /api/queues/pipeline-review`
 - `GET /api/queues/unassigned-tasks`
+- `GET /api/queues/summary`
 
 Planned endpoints:
 
@@ -563,6 +564,13 @@ Response:
         "source": "twenty:person",
         "queueClassification": "fresh_initial_task",
         "queueClassificationReasons": ["fresh_initial_task", "initial_outreach_task_open"],
+        "queuePrecedenceApplied": "fresh-leads",
+        "matchedQueueCandidates": ["fresh-leads"],
+        "excludedQueueCandidates": [],
+        "isOverdueTask": false,
+        "overdueDays": null,
+        "dueStatus": "upcoming",
+        "staleReason": null,
         "isTestRecord": false,
         "testRecordReasons": [],
         "reviewReasons": [],
@@ -577,8 +585,12 @@ Response:
       }
     ],
     "count": 1,
+    "totalCount": 42,
     "limit": 50,
     "offset": 0,
+    "hasMore": false,
+    "nextOffset": null,
+    "overdueCount": 3,
     "ownerScope": "mine",
     "assigneeScope": "mine",
     "dataSource": "twenty",
@@ -612,10 +624,10 @@ Queue read states:
   still set `isPartial=true` with warnings.
 - `status="degraded_rate_limited"`: a critical Twenty read such as `people`,
   `tasks`, `taskTargets`, or required `workspaceMembers` returned 429. The
-  response keeps `ok=true`, but `count=null`, `items=[]`, `isPartial=true`,
-  `partialReason="twenty_rate_limited"`, and `retryAfterSeconds` when Twenty
-  provided it. The workspace should show a temporary rate-limit state, not an
-  empty queue.
+  response keeps `ok=true`, but `count=null`, `totalCount=null`, `items=[]`,
+  `isPartial=true`, `partialReason="twenty_rate_limited"`, and
+  `retryAfterSeconds` when Twenty provided it. The workspace should show a
+  temporary rate-limit state, not an empty queue.
 - `status="stale_cache"`: a critical read was rate-limited, but the engine
   returned the last successful queue snapshot from the short-lived cache.
   `diagnostics.queueReadStatus.cache` includes `cachedAt`, `ageSeconds`, and
@@ -626,6 +638,49 @@ Critical queue reads are `people`, `tasks`, and `taskTargets`.
 `assigneeScope=mine` is needed to enforce rep ownership. `noteTargets` and
 `timelineActivities` are non-critical; their failures should be shown as
 warnings/diagnostics without implying the queue is empty.
+
+## GET /api/queues/summary
+
+Returns read-only aggregate counts for workspace navigation and pagination.
+
+Response data:
+
+```json
+{
+  "status": "ok",
+  "isPartial": false,
+  "partialReason": null,
+  "retryAfterSeconds": null,
+  "counts": {
+    "freshLeads": 42,
+    "followUps": 120,
+    "warmAssessments": 4,
+    "staleRecovery": 8,
+    "pipelineReview": 19,
+    "unassignedTasks": 22
+  },
+  "overdueTasksByQueue": {
+    "freshLeads": 5,
+    "followUps": 64,
+    "warmAssessments": 1,
+    "staleRecovery": 0,
+    "pipelineReview": 3,
+    "unassignedTasks": 2
+  },
+  "hiddenTestRecords": 11,
+  "diagnostics": {
+    "timelinePaginationWarning": null,
+    "queueReadStatus": {
+      "status": "ok"
+    }
+  },
+  "warnings": []
+}
+```
+
+If a critical Twenty read is rate-limited, summary returns
+`status="degraded_rate_limited"`, `isPartial=true`, `counts=null`,
+`overdueTasksByQueue=null`, and `retryAfterSeconds` when available.
 
 Fresh Leads criteria:
 
@@ -714,16 +769,23 @@ Protected assessment fields remain read-only from workspace Quick Capture.
 
 Stale Recovery criteria:
 
-- Person `staleRisk=STALE` or `HIGH`, or
-- `nextOutboundTouchDate` is older than the current day, or
-- `latestTouchStatus=NO_RESPONSE` with an active cadence stage.
-- Open generated first-touch Tasks from the missing next-task planner remain in
-  Fresh Leads when cadence is `NOT_STARTED` or `CONNECTION_REQUEST`; an old
-  inherited Person `nextOutboundTouchDate` alone should not route those items to
-  Stale Recovery.
-- `SENT` first-touch records with no post-initial Task are not classified as
-  Stale Recovery solely because `nextOutboundTouchDate` is old. They remain a
-  Follow-Up gap unless explicit stale fields such as `staleRisk` apply.
+- Person `staleRisk=STALE` or `HIGH`.
+- Explicit stale recovery flag/reason fields are present.
+- Cadence is `PAUSED` because outreach has stalled or no response was received.
+- `latestTouchStatus=NO_RESPONSE` and `lastOutboundTouchDate` is more than 30
+  days old.
+- `lastOutboundTouchDate` is more than 30 days old and no open actionable Task
+  exists.
+- Terminal/expired cadence has no response and no next path.
+
+Stale Recovery does not match solely because a Task is due today, a Task is
+overdue, or `nextOutboundTouchDate` is old. Overdue Tasks remain in their
+logical queue and expose `isOverdueTask`, `overdueDays`, and `dueStatus`.
+Generated first-touch Tasks remain in Fresh Leads; generated post-initial Tasks
+remain in Follow-Ups unless one of the relationship-stale criteria above is
+met.
+
+Every Stale Recovery item includes `staleReason`.
 
 Pipeline Review criteria:
 

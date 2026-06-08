@@ -1,6 +1,9 @@
 import express from 'express';
 import { requireWorkspaceAuth } from '../../middleware/supabaseWorkspaceAuth.js';
-import { getOutboundQueueWorkflow } from '../../workflows/outbound/getQueueWorkflow.js';
+import {
+  getOutboundQueueSummaryWorkflow,
+  getOutboundQueueWorkflow
+} from '../../workflows/outbound/getQueueWorkflow.js';
 
 const QUEUE_WORKSPACE_ROLES = ['admin', 'operator', 'rep'];
 const QUEUE_ROUTES = [
@@ -16,10 +19,29 @@ export function createQueueApiRouter({
   config = {},
   log,
   getOutboundQueueWorkflowFn = getOutboundQueueWorkflow,
+  getOutboundQueueSummaryWorkflowFn = getOutboundQueueSummaryWorkflow,
   workspaceAuthSupabaseClient,
   dataSource
 } = {}) {
   const router = express.Router();
+
+  router.get(
+    '/summary',
+    requireWorkspaceAuth({
+      config,
+      log,
+      allowedRoles: QUEUE_WORKSPACE_ROLES,
+      supabaseClient: workspaceAuthSupabaseClient
+    }),
+    async (req, res, next) => {
+      await handleQueueSummaryFetch(req, res, next, {
+        config,
+        log,
+        getOutboundQueueSummaryWorkflowFn,
+        dataSource
+      });
+    }
+  );
 
   for (const [queueSlug, path] of QUEUE_ROUTES) {
     router.get(
@@ -76,8 +98,12 @@ export async function handleQueueFetch(
           queueSlug: result.queueSlug,
           items: result.items,
           count: result.count,
+          totalCount: result.totalCount,
           limit: result.limit,
           offset: result.offset,
+          hasMore: result.hasMore,
+          nextOffset: result.nextOffset,
+          overdueCount: result.overdueCount,
           ownerScope: result.ownerScope,
           assigneeScope: result.assigneeScope,
           dataSource: result.dataSource,
@@ -87,6 +113,41 @@ export async function handleQueueFetch(
           retryAfterSeconds: result.retryAfterSeconds,
           diagnostics: result.diagnostics,
           warnings: result.warnings
+        },
+        warnings: result.warnings
+      })
+    );
+  } catch (error) {
+    handleQueueError(error, req, res, next);
+  }
+}
+
+export async function handleQueueSummaryFetch(
+  req,
+  res,
+  next,
+  {
+    config = {},
+    log,
+    getOutboundQueueSummaryWorkflowFn = getOutboundQueueSummaryWorkflow,
+    dataSource
+  } = {}
+) {
+  try {
+    const result = await getOutboundQueueSummaryWorkflowFn({
+      query: req.query ?? {},
+      config,
+      log: req.log ?? log,
+      workspaceUser: req.workspaceUser,
+      dataSource,
+      correlationId: req.correlationId
+    });
+
+    res.json(
+      successEnvelope({
+        correlationId: req.correlationId,
+        data: {
+          ...result
         },
         warnings: result.warnings
       })

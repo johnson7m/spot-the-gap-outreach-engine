@@ -5,7 +5,7 @@ import {
   clearTwentyQueueReadCache,
   createTwentyQueueDataSource
 } from '../src/integrations/twenty/queueDataSource.js';
-import { handleQueueFetch } from '../src/routes/api/queueRoutes.js';
+import { handleQueueFetch, handleQueueSummaryFetch } from '../src/routes/api/queueRoutes.js';
 import { buildQueueClassificationDiagnostics } from '../src/services/queueService.js';
 import { processAssessmentSubmission } from '../src/workflows/assessmentWorkflow.js';
 import { getOutboundQueueWorkflow } from '../src/workflows/outbound/getQueueWorkflow.js';
@@ -127,6 +127,31 @@ describe('outbound queue workflow', () => {
       'people-fresh',
       'people-other-fresh'
     ]);
+  });
+
+  it('returns queue pagination metadata with page count and total count', async () => {
+    const result = await getOutboundQueueWorkflow({
+      queueSlug: 'fresh-leads',
+      query: {
+        ownerScope: 'all',
+        limit: 1,
+        offset: 0
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource(),
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+
+    expect(result).toMatchObject({
+      count: 1,
+      totalCount: 2,
+      limit: 1,
+      offset: 0,
+      hasMore: true,
+      nextOffset: 1
+    });
+    expect(result.items).toHaveLength(1);
   });
 
   it('identifies stale recovery leads', async () => {
@@ -254,7 +279,8 @@ describe('outbound queue workflow', () => {
       queueLead('people-post-initial-stale', {
         cadenceStage: 'INTRO_MESSAGE',
         latestTouchStatus: 'NO_RESPONSE',
-        nextOutboundTouchDate: '2026-06-01'
+        nextOutboundTouchDate: '2026-06-01',
+        lastOutboundTouchDate: '2026-04-30'
       })
     ];
     const tasks = [
@@ -284,8 +310,193 @@ describe('outbound queue workflow', () => {
 
     expect(result.items.map((item) => item.personId)).toEqual(['people-post-initial-stale']);
     expect(result.items[0].queueClassificationReasons).toEqual(
-      expect.arrayContaining(['next_touch_overdue', 'latest_touch_no_response'])
+      expect.arrayContaining(['latest_touch_no_response', 'last_outbound_touch_older_than_30_days'])
     );
+    expect(result.items[0].staleReason).toBe(
+      'Latest touch is NO_RESPONSE and last outbound touch is 37 days old.'
+    );
+  });
+
+  it('keeps overdue post-initial follow-up tasks in Follow-Ups instead of Stale Recovery', async () => {
+    const people = [
+      queueLead('people-overdue-follow-up', {
+        cadenceStage: 'INTRO_MESSAGE',
+        latestTouchStatus: 'SENT',
+        nextOutboundTouchDate: '2026-06-01'
+      })
+    ];
+    const tasks = [
+      queueTask('tasks-overdue-follow-up', {
+        personId: 'people-overdue-follow-up',
+        title: 'Send contextual introduction',
+        dueAt: '2026-06-01',
+        bodyV2: {
+          markdown: [
+            'Person ID: people-overdue-follow-up',
+            'Cadence: RELATIONSHIP_BUILDING_V1',
+            'Next cadence stage: INTRO_MESSAGE',
+            'Latest touch status: SENT'
+          ].join('\n')
+        }
+      })
+    ];
+    const followUps = await getOutboundQueueWorkflow({
+      queueSlug: 'follow-ups',
+      query: {
+        ownerScope: 'all',
+        dueBefore: '2026-06-08'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({ people, tasks }),
+      now: new Date('2026-06-08T15:00:00.000Z')
+    });
+    const stale = await getOutboundQueueWorkflow({
+      queueSlug: 'stale-recovery',
+      query: {
+        ownerScope: 'all'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({ people, tasks }),
+      now: new Date('2026-06-08T15:00:00.000Z')
+    });
+
+    expect(followUps.items.map((item) => item.personId)).toEqual(['people-overdue-follow-up']);
+    expect(followUps.items[0]).toMatchObject({
+      dueStatus: 'overdue',
+      isOverdueTask: true,
+      overdueDays: 7,
+      queueClassification: 'follow_up_post_initial_touch'
+    });
+    expect(stale.items).toHaveLength(0);
+  });
+
+  it('keeps overdue first-touch tasks in Fresh Leads instead of Stale Recovery', async () => {
+    const people = [
+      queueLead('people-overdue-fresh', {
+        cadenceStage: 'CONNECTION_REQUEST',
+        latestTouchStatus: 'DRAFTED',
+        nextOutboundTouchDate: '2026-05-15'
+      })
+    ];
+    const tasks = [
+      queueTask('tasks-overdue-fresh', {
+        personId: 'people-overdue-fresh',
+        title: 'Send relationship-oriented connection request',
+        dueAt: '2026-06-01',
+        bodyV2: {
+          markdown: [
+            'Person ID: people-overdue-fresh',
+            'Cadence: RELATIONSHIP_BUILDING_V1',
+            'Cadence stage: CONNECTION_REQUEST',
+            'Task type: connection_request'
+          ].join('\n')
+        }
+      })
+    ];
+    const fresh = await getOutboundQueueWorkflow({
+      queueSlug: 'fresh-leads',
+      query: {
+        ownerScope: 'all'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({ people, tasks }),
+      now: new Date('2026-06-08T15:00:00.000Z')
+    });
+    const stale = await getOutboundQueueWorkflow({
+      queueSlug: 'stale-recovery',
+      query: {
+        ownerScope: 'all'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({ people, tasks }),
+      now: new Date('2026-06-08T15:00:00.000Z')
+    });
+
+    expect(fresh.items.map((item) => item.personId)).toEqual(['people-overdue-fresh']);
+    expect(fresh.items[0]).toMatchObject({
+      dueStatus: 'overdue',
+      isOverdueTask: true,
+      overdueDays: 7,
+      queueClassification: 'fresh_initial_task'
+    });
+    expect(stale.items).toHaveLength(0);
+  });
+
+  it('does not classify old nextOutboundTouchDate alone as Stale Recovery', async () => {
+    const people = [
+      queueLead('people-old-next-touch-only', {
+        cadenceStage: 'INTRO_MESSAGE',
+        latestTouchStatus: 'SENT',
+        nextOutboundTouchDate: '2026-05-01'
+      })
+    ];
+    const result = await getOutboundQueueWorkflow({
+      queueSlug: 'stale-recovery',
+      query: {
+        ownerScope: 'all'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({ people, tasks: [] }),
+      now: new Date('2026-06-08T15:00:00.000Z')
+    });
+
+    expect(result.items).toHaveLength(0);
+  });
+
+  it('routes staleRisk=STALE records to Stale Recovery with a stale reason', async () => {
+    const people = [
+      queueLead('people-stale-risk', {
+        cadenceStage: 'VALUE_TOUCH',
+        latestTouchStatus: 'SENT',
+        staleRisk: 'STALE'
+      })
+    ];
+    const result = await getOutboundQueueWorkflow({
+      queueSlug: 'stale-recovery',
+      query: {
+        ownerScope: 'all'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({ people, tasks: [] }),
+      now: new Date('2026-06-08T15:00:00.000Z')
+    });
+
+    expect(result.items[0]).toMatchObject({
+      personId: 'people-stale-risk',
+      staleReason: 'staleRisk=STALE',
+      queueClassificationReasons: expect.arrayContaining(['stale_risk_stale'])
+    });
+  });
+
+  it('routes PAUSED stalled cadence records to Stale Recovery', async () => {
+    const people = [
+      queueLead('people-paused-stalled', {
+        cadenceStage: 'PAUSED',
+        latestTouchStatus: 'NO_RESPONSE'
+      })
+    ];
+    const result = await getOutboundQueueWorkflow({
+      queueSlug: 'stale-recovery',
+      query: {
+        ownerScope: 'all'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({ people, tasks: [] }),
+      now: new Date('2026-06-08T15:00:00.000Z')
+    });
+
+    expect(result.items[0]).toMatchObject({
+      personId: 'people-paused-stalled',
+      staleReason: 'Cadence is PAUSED after stalled/no-response outreach.',
+      queueClassificationReasons: expect.arrayContaining(['cadence_paused_stalled'])
+    });
   });
 
   it('identifies warm assessment leads from protected assessment fields', async () => {
@@ -1712,7 +1923,10 @@ describe('outbound queue workflow', () => {
     });
 
     expect(result.assigneeScope).toBe('mine');
-    expect(result.count).toBe(2);
+    expect(result.count).toBe(1);
+    expect(result.totalCount).toBe(2);
+    expect(result.hasMore).toBe(false);
+    expect(result.nextOffset).toBeNull();
     expect(result.items.map((item) => item.taskId)).toEqual(['tasks-owned-2']);
   });
 });
@@ -1730,6 +1944,44 @@ describe('queue API auth', () => {
 
     expect(response.statusCode).toBe(401);
     expect(response.body.errors[0].code).toBe('WORKSPACE_AUTH_REQUIRED');
+  });
+});
+
+describe('queue summary API', () => {
+  it('returns queue counts and overdue counts', async () => {
+    const response = await invokeQueueSummaryRoute({
+      headers: {
+        authorization: 'Bearer valid-token'
+      },
+      query: {
+        ownerScope: 'all'
+      },
+      dependencies: {
+        dataSource: fakeQueueDataSource()
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({
+      ok: true,
+      correlationId: 'queue-route-correlation',
+      data: {
+        counts: {
+          freshLeads: expect.any(Number),
+          followUps: expect.any(Number),
+          warmAssessments: expect.any(Number),
+          staleRecovery: expect.any(Number),
+          pipelineReview: expect.any(Number),
+          unassignedTasks: expect.any(Number)
+        },
+        overdueTasksByQueue: {
+          freshLeads: expect.any(Number),
+          followUps: expect.any(Number)
+        },
+        hiddenTestRecords: expect.any(Number)
+      },
+      errors: []
+    });
   });
 });
 
@@ -2089,6 +2341,45 @@ async function invokeQueueRoute({
       config,
       log: silentLog,
       getOutboundQueueWorkflowFn: getOutboundQueueWorkflow,
+      dataSource: fakeQueueDataSource(),
+      ...dependencies
+    });
+  }
+
+  if (res.error) {
+    throw res.error;
+  }
+
+  return res;
+}
+
+async function invokeQueueSummaryRoute({
+  headers = {},
+  query = {},
+  config = baseConfig,
+  supabaseClient = createFakeWorkspaceSupabaseClient({ profile: workspaceProfile() }),
+  dependencies = {}
+} = {}) {
+  const { req, res, next } = createMockExchange({
+    headers,
+    query
+  });
+  const auth = requireWorkspaceAuth({
+    config,
+    log: silentLog,
+    allowedRoles: ['admin', 'operator', 'rep'],
+    supabaseClient
+  });
+  let authenticated = false;
+
+  await auth(req, res, () => {
+    authenticated = true;
+  });
+
+  if (authenticated) {
+    await handleQueueSummaryFetch(req, res, next, {
+      config,
+      log: silentLog,
       dataSource: fakeQueueDataSource(),
       ...dependencies
     });

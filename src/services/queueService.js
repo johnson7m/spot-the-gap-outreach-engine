@@ -51,6 +51,8 @@ const POST_INITIAL_CADENCE_STAGES = new Set([
   'DISCOVERY_ASK'
 ]);
 const STALE_RISK_VALUES = new Set(['STALE', 'HIGH']);
+const EXPLICIT_STALE_FLAGS = new Set(['STALE', 'TRUE', 'YES', 'NEEDS_STALE_RECOVERY']);
+const STALE_NO_RESPONSE_DAY_THRESHOLD = 30;
 const INITIAL_TASK_PATTERNS = [
   /send relationship-oriented connection request/i,
   /send assessment-oriented connection request/i,
@@ -163,14 +165,19 @@ export function buildQueue({
     normalizedQuery.offset,
     normalizedQuery.offset + normalizedQuery.limit
   );
+  const hasMore = normalizedQuery.offset + pagedItems.length < scopedItems.length;
 
   return {
     queueName: definition.name,
     queueSlug: definition.slug,
     items: pagedItems,
-    count: scopedItems.length,
+    count: pagedItems.length,
+    totalCount: scopedItems.length,
     limit: normalizedQuery.limit,
     offset: normalizedQuery.offset,
+    hasMore,
+    nextOffset: hasMore ? normalizedQuery.offset + pagedItems.length : null,
+    overdueCount: scopedItems.filter((item) => item.isOverdueTask).length,
     ownerScope: normalizedQuery.ownerScope,
     assigneeScope: normalizedQuery.assigneeScope,
     diagnostics: {
@@ -242,7 +249,7 @@ export function buildQueueClassificationDiagnostics({
         now
       });
 
-      rows.push(toClassificationDiagnosticRow({ person, task, tasks: personTasks, diagnostic }));
+      rows.push(toClassificationDiagnosticRow({ person, task, tasks: personTasks, diagnostic, now }));
     }
   }
 
@@ -260,7 +267,7 @@ export function buildQueueClassificationDiagnostics({
         now
       });
 
-      rows.push(toClassificationDiagnosticRow({ person, task, tasks: task ? [task] : [], diagnostic }));
+      rows.push(toClassificationDiagnosticRow({ person, task, tasks: task ? [task] : [], diagnostic, now }));
     }
   }
 
@@ -273,8 +280,10 @@ export function buildQueueClassificationDiagnostics({
   };
 }
 
-function toClassificationDiagnosticRow({ person, task, tasks = [], diagnostic }) {
+function toClassificationDiagnosticRow({ person, task, tasks = [], diagnostic, now = new Date() }) {
   const taskList = tasks.length > 0 ? tasks : task ? [task] : [];
+  const stale = getStaleRecoveryMatch(person, now, task);
+  const due = getTaskDueInfo(task, now);
 
   return {
     personId: person?.personId ?? task?.personId ?? null,
@@ -286,10 +295,19 @@ function toClassificationDiagnosticRow({ person, task, tasks = [], diagnostic })
     initialTaskDetected: taskList.some(isInitialOutreachTask),
     firstTouchAlreadySent: isFirstTouchAlreadySent(person),
     followUpTaskDetected: taskList.some(isPostInitialFollowUpTask),
+    staleTriggerMatched: stale.matched,
+    staleReason: stale.reason,
+    dueStatus: due.dueStatus,
+    isOverdueTask: due.isOverdueTask,
     recommendedFix: getRecommendedClassificationFix({ person, task, tasks: taskList, diagnostic }),
     matchedQueues: diagnostic.matchedQueues,
+    matchedQueueCandidates: diagnostic.matchedQueues,
     finalQueue: diagnostic.finalQueue,
+    queuePrecedenceApplied: diagnostic.finalQueue,
     excludedQueues: diagnostic.excludedQueues,
+    excludedQueueCandidates: diagnostic.excludedQueues
+      .map((excludedQueue) => excludedQueue.queueSlug ?? excludedQueue)
+      .filter(Boolean),
     classificationReasons: diagnostic.classificationReasons
   };
 }
@@ -359,29 +377,24 @@ function selectQueueCandidates({
     case 'fresh-leads':
       return people
         .filter((person) => isFreshLead(person, tasksByPersonId.get(person.personId)))
-        .map((person) => toQueueItem({
-          person,
-          task: firstOpenTask(tasksByPersonId.get(person.personId)),
-          source: 'twenty:person',
-          itemWarnings: buildFreshLeadWarnings(person, tasksByPersonId.get(person.personId)),
-          suggestedResolutionActions: firstOpenTask(tasksByPersonId.get(person.personId))
-            ? []
-            : ['create_next_task'],
-          queueClassification: 'fresh_initial_task',
-          queueClassificationReasons: buildFreshLeadClassificationReasons(
+        .map((person) => {
+          const personTasks = tasksByPersonId.get(person.personId) ?? [];
+          const task = firstOpenTask(personTasks);
+
+          return toClassifiedQueueItem({
             person,
-            firstOpenTask(tasksByPersonId.get(person.personId))
-          ),
-          classificationDiagnostics: query.includeDiagnostics
-            ? buildPairClassificationDiagnostic({
-                person,
-                task: firstOpenTask(tasksByPersonId.get(person.personId)),
-                tasks: tasksByPersonId.get(person.personId) ?? [],
-                queueSlug,
-                now
-              })
-            : null
-        }));
+            task,
+            tasks: personTasks,
+            source: 'twenty:person',
+            itemWarnings: buildFreshLeadWarnings(person, personTasks),
+            suggestedResolutionActions: task ? [] : ['create_next_task'],
+            queueClassification: 'fresh_initial_task',
+            queueClassificationReasons: buildFreshLeadClassificationReasons(person, task),
+            queueSlug,
+            query,
+            now
+          });
+        });
 
     case 'follow-ups': {
       const taskItems = filterFollowUpTasks({
@@ -403,22 +416,17 @@ function selectQueueCandidates({
             return null;
           }
 
-          return toQueueItem({
+          return toClassifiedQueueItem({
             person: person ?? createUnknownPersonFromTask(task),
             task,
+            tasks: personTasks,
             source: task.personId ? 'twenty:task' : 'twenty:task-unlinked',
             itemWarnings: buildTaskAssociationWarnings(task, person),
             queueClassification: classification.queueClassification,
             queueClassificationReasons: classification.reasons,
-            classificationDiagnostics: query.includeDiagnostics
-              ? buildPairClassificationDiagnostic({
-                  person: person ?? createUnknownPersonFromTask(task),
-                  task,
-                  tasks: personTasks,
-                  queueSlug,
-                  now
-                })
-              : null
+            queueSlug,
+            query,
+            now
           });
         })
         .filter(Boolean)
@@ -431,9 +439,10 @@ function selectQueueCandidates({
           openTasks: tasksByPersonId.get(person.personId) ?? []
         }))
         .filter(({ person, openTasks }) => isSentInitialFollowUpGap(person, openTasks))
-        .map(({ person, openTasks }) => toQueueItem({
+        .map(({ person, openTasks }) => toClassifiedQueueItem({
           person,
           task: firstOpenTask(openTasks),
+          tasks: openTasks,
           source: 'twenty:person',
           itemWarnings: ['Initial touch appears sent, but no follow-up task exists.'],
           suggestedResolutionActions: ['create_follow_up_task'],
@@ -443,15 +452,9 @@ function selectQueueCandidates({
             'initial_touch_already_sent',
             'needs_next_follow_up_task'
           ],
-          classificationDiagnostics: query.includeDiagnostics
-            ? buildPairClassificationDiagnostic({
-                person,
-                task: firstOpenTask(openTasks),
-                tasks: openTasks,
-                queueSlug,
-                now
-              })
-            : null
+          queueSlug,
+          query,
+          now
         }));
 
       return [...taskItems, ...gapItems];
@@ -461,28 +464,27 @@ function selectQueueCandidates({
       return tasks
         .filter((task) => isUnassignedTask(task))
         .filter((task) => matchesTaskFilters(task, query))
-        .map((task) => toUnassignedTaskQueueItem({ task }));
+        .map((task) => toUnassignedTaskQueueItem({ task, now }));
 
     case 'warm-assessments':
       return people
         .filter((person) => isWarmAssessment(person))
-        .map((person) => toQueueItem({
-          person,
-          task: firstOpenTask(tasksByPersonId.get(person.personId)),
-          source: 'twenty:person',
-          itemWarnings: [],
-          queueClassification: 'warm_assessment_ready',
-          queueClassificationReasons: buildWarmAssessmentClassificationReasons(person),
-          classificationDiagnostics: query.includeDiagnostics
-            ? buildPairClassificationDiagnostic({
-                person,
-                task: firstOpenTask(tasksByPersonId.get(person.personId)),
-                tasks: tasksByPersonId.get(person.personId) ?? [],
-                queueSlug,
-                now
-              })
-            : null
-        }));
+        .map((person) => {
+          const personTasks = tasksByPersonId.get(person.personId) ?? [];
+
+          return toClassifiedQueueItem({
+            person,
+            task: firstOpenTask(personTasks),
+            tasks: personTasks,
+            source: 'twenty:person',
+            itemWarnings: [],
+            queueClassification: 'warm_assessment_ready',
+            queueClassificationReasons: buildWarmAssessmentClassificationReasons(person),
+            queueSlug,
+            query,
+            now
+          });
+        });
 
     case 'stale-recovery':
       return people
@@ -492,22 +494,17 @@ function selectQueueCandidates({
           personTasks: tasksByPersonId.get(person.personId) ?? []
         }))
         .filter(({ person, openTask }) => isStaleRecovery(person, now, openTask))
-        .map(({ person, openTask, personTasks }) => toQueueItem({
+        .map(({ person, openTask, personTasks }) => toClassifiedQueueItem({
           person,
           task: openTask,
+          tasks: personTasks,
           source: 'twenty:person',
-          itemWarnings: buildStaleWarnings(person, openTask),
+          itemWarnings: buildStaleWarnings(person, now, openTask),
           queueClassification: 'stale_recovery_stale',
           queueClassificationReasons: buildStaleClassificationReasons(person, now, openTask),
-          classificationDiagnostics: query.includeDiagnostics
-            ? buildPairClassificationDiagnostic({
-                person,
-                task: openTask,
-                tasks: personTasks,
-                queueSlug,
-                now
-              })
-            : null
+          queueSlug,
+          query,
+          now
         }));
 
     case 'pipeline-review':
@@ -527,24 +524,19 @@ function selectQueueCandidates({
           };
         })
         .filter(({ reviewWarnings }) => reviewWarnings.length > 0)
-        .map(({ person, openTask, personTasks, reviewWarnings, reviewReasons, suggestedResolutionActions }) => toQueueItem({
+        .map(({ person, openTask, personTasks, reviewWarnings, reviewReasons, suggestedResolutionActions }) => toClassifiedQueueItem({
           person,
           task: openTask,
+          tasks: personTasks,
           source: 'twenty:person',
           itemWarnings: reviewWarnings,
           reviewReasons,
           suggestedResolutionActions,
           queueClassification: getPipelineReviewClassification(reviewReasons),
           queueClassificationReasons: reviewReasons,
-          classificationDiagnostics: query.includeDiagnostics
-            ? buildPairClassificationDiagnostic({
-                person,
-                task: openTask,
-                tasks: personTasks,
-                queueSlug,
-                now
-              })
-            : null
+          queueSlug,
+          query,
+          now
         }));
 
     default:
@@ -582,6 +574,7 @@ function normalizePersonRecord({
     leadHealthScore: normalizeNumber(person.leadHealthScore),
     icpFitScore: normalizeNumber(person.icpFitScore),
     nextOutboundTouchDate: normalizeDateString(person.nextOutboundTouchDate),
+    lastOutboundTouchDate: normalizeDateString(person.lastOutboundTouchDate),
     latestTouchChannel: normalizeSelect(person.latestTouchChannel),
     latestTouchStatus: normalizeSelect(person.latestTouchStatus),
     outreachAngle: firstString(person.outreachAngle),
@@ -591,6 +584,10 @@ function normalizePersonRecord({
     discoveryReadiness: normalizeSelect(person.discoveryReadiness),
     enrichmentStatus: normalizeSelect(person.enrichmentStatus),
     staleRisk: normalizeSelect(person.staleRisk),
+    staleRecoveryFlag: normalizeSelect(
+      firstString(person.staleRecoveryFlag, person.requiresStaleRecovery, person.staleRecovery)
+    ),
+    staleRecoveryReason: firstString(person.staleRecoveryReason, person.staleReason, person.recoveryReason),
     leadSource: normalizeSelect(person.leadSource),
     source: normalizeSelect(person.leadSource) || 'TWENTY_PERSON',
     owner,
@@ -647,6 +644,33 @@ function normalizeTaskRecord({
   };
 }
 
+function toClassifiedQueueItem({
+  person,
+  task,
+  tasks = [],
+  queueSlug,
+  query = {},
+  now = new Date(),
+  ...item
+}) {
+  const classification = buildPairClassificationDiagnostic({
+    person,
+    task,
+    tasks,
+    queueSlug,
+    now
+  });
+
+  return toQueueItem({
+    ...item,
+    person,
+    task,
+    now,
+    queueCandidates: classification,
+    classificationDiagnostics: query.includeDiagnostics ? classification : null
+  });
+}
+
 function toQueueItem({
   person,
   task,
@@ -656,9 +680,13 @@ function toQueueItem({
   reviewReasons = [],
   queueClassification = null,
   queueClassificationReasons = [],
-  classificationDiagnostics = null
+  classificationDiagnostics = null,
+  queueCandidates = null,
+  now = new Date()
 }) {
   const owner = mergeOwnerContexts(person?.owner, task?.assignee);
+  const due = getTaskDueInfo(task, now);
+  const stale = getStaleRecoveryMatch(person, now, task);
 
   return {
     personId: person?.personId ?? task?.personId ?? null,
@@ -699,7 +727,16 @@ function toQueueItem({
     source,
     queueClassification,
     queueClassificationReasons: uniqueStrings(queueClassificationReasons),
+    queuePrecedenceApplied: queueCandidates?.finalQueue ?? queueClassification,
+    matchedQueueCandidates: queueCandidates?.matchedQueues ?? [],
+    excludedQueueCandidates: (queueCandidates?.excludedQueues ?? [])
+      .map((excludedQueue) => excludedQueue.queueSlug ?? excludedQueue)
+      .filter(Boolean),
     ...(classificationDiagnostics ? { classificationDiagnostics } : {}),
+    isOverdueTask: due.isOverdueTask,
+    overdueDays: due.overdueDays,
+    dueStatus: due.dueStatus,
+    staleReason: stale.reason,
     isTestRecord: Boolean(person?.isTestRecord),
     testRecordReasons: person?.testRecordReasons ?? [],
     reviewReasons,
@@ -722,7 +759,9 @@ function toQueueItem({
   };
 }
 
-function toUnassignedTaskQueueItem({ task }) {
+function toUnassignedTaskQueueItem({ task, now = new Date() }) {
+  const due = getTaskDueInfo(task, now);
+
   return {
     personId: null,
     taskId: task.taskId,
@@ -746,6 +785,13 @@ function toUnassignedTaskQueueItem({ task }) {
     personResolutionEvidence: task.personResolutionEvidence ?? [],
     queueClassification: 'unassigned_task_review',
     queueClassificationReasons: ['unassigned_task_no_person_link'],
+    queuePrecedenceApplied: 'unassigned-tasks',
+    matchedQueueCandidates: ['unassigned-tasks'],
+    excludedQueueCandidates: [],
+    isOverdueTask: due.isOverdueTask,
+    overdueDays: due.overdueDays,
+    dueStatus: due.dueStatus,
+    staleReason: null,
     queueBucket: 'unassigned_tasks',
     suggestedResolutionActions: UNASSIGNED_TASK_ACTIONS,
     source: 'twenty:task-unassigned',
@@ -813,21 +859,78 @@ function isWarmAssessment(person) {
   );
 }
 
-function isStaleRecovery(person, now, task = null) {
-  if (STALE_RISK_VALUES.has(person.staleRisk)) {
-    return true;
+function getStaleRecoveryMatch(person = {}, now = new Date(), task = null) {
+  if (!person) {
+    return {
+      matched: false,
+      reason: null,
+      reasons: []
+    };
   }
 
-  const nextTouchDate = normalizeDateInput(person.nextOutboundTouchDate);
+  if (STALE_RISK_VALUES.has(person.staleRisk)) {
+    return buildStaleMatch(`staleRisk=${person.staleRisk}`, [`stale_risk_${person.staleRisk.toLowerCase()}`]);
+  }
 
-  if (nextTouchDate && isBeforeStartOfDay(nextTouchDate, now)) {
-    return (
-      !isFreshInitialGeneratedTaskProtectedFromStale(person, task) &&
-      !isSentInitialGapProtectedFromStale(person, task)
+  if (EXPLICIT_STALE_FLAGS.has(normalizeSelect(person.staleRecoveryFlag)) || person.staleRecoveryReason) {
+    return buildStaleMatch(
+      person.staleRecoveryReason || 'Explicit stale recovery flag is set.',
+      ['explicit_stale_recovery_flag']
     );
   }
 
-  return person.latestTouchStatus === 'NO_RESPONSE' && Boolean(person.cadenceStage);
+  const lastTouchDate = normalizeDateInput(person.lastOutboundTouchDate);
+  const lastTouchAgeDays = lastTouchDate ? daysBetweenDates(lastTouchDate, now) : null;
+  const lastTouchOlderThanThreshold =
+    lastTouchAgeDays !== null && lastTouchAgeDays > STALE_NO_RESPONSE_DAY_THRESHOLD;
+  const hasOpenActionableTask = Boolean(task && isOpenTask(task));
+
+  if (
+    person.cadenceStage === 'PAUSED' &&
+    (person.latestTouchStatus === 'NO_RESPONSE' || lastTouchOlderThanThreshold)
+  ) {
+    return buildStaleMatch('Cadence is PAUSED after stalled/no-response outreach.', [
+      'cadence_paused_stalled'
+    ]);
+  }
+
+  if (person.latestTouchStatus === 'NO_RESPONSE' && lastTouchOlderThanThreshold) {
+    return buildStaleMatch(
+      `Latest touch is NO_RESPONSE and last outbound touch is ${lastTouchAgeDays} days old.`,
+      ['latest_touch_no_response', 'last_outbound_touch_older_than_30_days']
+    );
+  }
+
+  if (lastTouchOlderThanThreshold && !hasOpenActionableTask) {
+    return buildStaleMatch(
+      `Last outbound touch is ${lastTouchAgeDays} days old and no open actionable task exists.`,
+      ['last_outbound_touch_older_than_30_days', 'no_open_actionable_task']
+    );
+  }
+
+  if (isTerminalCadenceStage(person.cadenceStage) && person.latestTouchStatus === 'NO_RESPONSE' && !hasOpenActionableTask) {
+    return buildStaleMatch('Cadence is terminal/expired with no response and no next path.', [
+      'terminal_no_response_no_next_path'
+    ]);
+  }
+
+  return {
+    matched: false,
+    reason: null,
+    reasons: []
+  };
+}
+
+function buildStaleMatch(reason, reasons = []) {
+  return {
+    matched: true,
+    reason,
+    reasons
+  };
+}
+
+function isStaleRecovery(person, now, task = null) {
+  return getStaleRecoveryMatch(person, now, task).matched;
 }
 
 function buildFreshLeadClassificationReasons(person, task) {
@@ -871,28 +974,7 @@ function buildWarmAssessmentClassificationReasons(person) {
 }
 
 function buildStaleClassificationReasons(person, now, task = null) {
-  const reasons = ['stale_recovery_stale'];
-
-  if (STALE_RISK_VALUES.has(person.staleRisk)) {
-    reasons.push(`stale_risk_${person.staleRisk.toLowerCase()}`);
-  }
-
-  const nextTouchDate = normalizeDateInput(person.nextOutboundTouchDate);
-
-  if (
-    nextTouchDate &&
-    isBeforeStartOfDay(nextTouchDate, now) &&
-    !isFreshInitialGeneratedTaskProtectedFromStale(person, task) &&
-    !isSentInitialGapProtectedFromStale(person, task)
-  ) {
-    reasons.push('next_touch_overdue');
-  }
-
-  if (person.latestTouchStatus === 'NO_RESPONSE') {
-    reasons.push('latest_touch_no_response');
-  }
-
-  return reasons;
+  return ['stale_recovery_stale', ...getStaleRecoveryMatch(person, now, task).reasons];
 }
 
 function classifyFollowUpTask({ person, task, tasks = [] } = {}) {
@@ -1324,6 +1406,43 @@ function isDueOpenTask(task, query) {
   return toDateOnly(dueDate) === toDateOnly(query.dueBefore);
 }
 
+function getTaskDueInfo(task = null, now = new Date()) {
+  const dueDate = normalizeDateInput(task?.dueDate);
+
+  if (!task || !dueDate) {
+    return {
+      dueStatus: 'none',
+      isOverdueTask: false,
+      overdueDays: null
+    };
+  }
+
+  const dueDateOnly = toDateOnly(dueDate);
+  const todayDateOnly = toDateOnly(normalizeDateInput(now) ?? new Date());
+
+  if (dueDateOnly < todayDateOnly) {
+    return {
+      dueStatus: 'overdue',
+      isOverdueTask: true,
+      overdueDays: Math.max(daysBetweenDates(dueDate, now), 1)
+    };
+  }
+
+  if (dueDateOnly === todayDateOnly) {
+    return {
+      dueStatus: 'due_today',
+      isOverdueTask: false,
+      overdueDays: 0
+    };
+  }
+
+  return {
+    dueStatus: 'upcoming',
+    isOverdueTask: false,
+    overdueDays: null
+  };
+}
+
 function filterFollowUpTasks({
   tasks = [],
   query = {},
@@ -1555,23 +1674,16 @@ function buildTaskAssociationWarnings(task, person) {
   return warnings;
 }
 
-function buildStaleWarnings(person, task = null) {
+function buildStaleWarnings(person, now = new Date(), task = null) {
   const warnings = [];
+  const stale = getStaleRecoveryMatch(person, now, task);
 
   if (STALE_RISK_VALUES.has(person.staleRisk)) {
     warnings.push(`Stale risk is ${person.staleRisk}.`);
   }
 
-  if (person.latestTouchStatus === 'NO_RESPONSE') {
-    warnings.push('Latest touch status is NO_RESPONSE.');
-  }
-
-  if (
-    person.nextOutboundTouchDate &&
-    !isFreshInitialGeneratedTaskProtectedFromStale(person, task) &&
-    !isSentInitialGapProtectedFromStale(person, task)
-  ) {
-    warnings.push(`Next outbound touch date is ${person.nextOutboundTouchDate}.`);
+  if (stale.reason && !warnings.includes(stale.reason)) {
+    warnings.push(stale.reason);
   }
 
   return warnings;
@@ -1591,11 +1703,15 @@ function createUnknownPersonFromTask(task) {
     leadHealthScore: null,
     icpFitScore: null,
     nextOutboundTouchDate: null,
+    lastOutboundTouchDate: null,
     latestTouchChannel: task.latestTouchChannel,
     latestTouchStatus: task.latestTouchStatus,
     outreachAngle: null,
     source: 'TWENTY_TASK',
     owner: null,
+    staleRisk: null,
+    staleRecoveryFlag: null,
+    staleRecoveryReason: null,
     taskWarnings: []
   };
 }
@@ -2134,6 +2250,20 @@ function isBeforeStartOfDay(value, comparison) {
   }
 
   return toDateOnly(date) < toDateOnly(comparisonDate);
+}
+
+function daysBetweenDates(left, right) {
+  const leftDate = normalizeDateInput(left);
+  const rightDate = normalizeDateInput(right) ?? new Date();
+
+  if (!leftDate) {
+    return null;
+  }
+
+  const leftStart = Date.UTC(leftDate.getUTCFullYear(), leftDate.getUTCMonth(), leftDate.getUTCDate());
+  const rightStart = Date.UTC(rightDate.getUTCFullYear(), rightDate.getUTCMonth(), rightDate.getUTCDate());
+
+  return Math.floor((rightStart - leftStart) / 86_400_000);
 }
 
 function uniqueStrings(values) {
