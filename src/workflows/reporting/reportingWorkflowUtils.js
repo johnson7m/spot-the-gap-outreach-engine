@@ -1,4 +1,5 @@
 import { createTwentyQueueDataSource } from '../../integrations/twenty/queueDataSource.js';
+import { createSupabaseClient } from '../../integrations/supabase/client.js';
 import { normalizeQueueQuery } from '../../services/queueService.js';
 
 export async function loadReportingSourceRecords({
@@ -43,6 +44,61 @@ export async function loadReportingSourceRecords({
   };
 }
 
+export async function loadReportingActivityRecords({
+  query = {},
+  config = {},
+  activitySource,
+  supabaseClient
+} = {}) {
+  if (activitySource?.listReportingActivityRecords) {
+    return activitySource.listReportingActivityRecords({ query, config });
+  }
+
+  const client = supabaseClient ?? createSupabaseClient(config.supabase ?? {});
+
+  if (!client) {
+    return {
+      outboundEvents: [],
+      crmSyncLogs: [],
+      assessmentSubmissions: [],
+      warnings: ['Supabase is not configured; event-based rep-performance metrics are unavailable.']
+    };
+  }
+
+  const dateRange = resolveActivityDateRange(query);
+  const [outboundEvents, crmSyncLogs, assessmentSubmissions] = await Promise.all([
+    readSupabaseTable({
+      client,
+      table: 'outbound_events',
+      startDate: dateRange.startDate,
+      endDate: dateRange.endDate
+    }),
+    readSupabaseTable({
+      client,
+      table: 'crm_sync_logs',
+      startDate: dateRange.startDate,
+      endDate: dateRange.endDate
+    }),
+    readSupabaseTable({
+      client,
+      table: 'assessment_submissions',
+      startDate: dateRange.startDate,
+      endDate: dateRange.endDate
+    })
+  ]);
+
+  return {
+    outboundEvents: outboundEvents.records,
+    crmSyncLogs: crmSyncLogs.records,
+    assessmentSubmissions: assessmentSubmissions.records,
+    warnings: uniqueStrings([
+      ...outboundEvents.warnings,
+      ...crmSyncLogs.warnings,
+      ...assessmentSubmissions.warnings
+    ])
+  };
+}
+
 export function buildDegradedReportingResult({
   reportName,
   readStatus = {},
@@ -66,6 +122,65 @@ export function buildDegradedReportingResult({
     },
     warnings: uniqueStrings(warnings)
   };
+}
+
+async function readSupabaseTable({ client, table, startDate, endDate }) {
+  const response = await client
+    .from(table)
+    .select('*')
+    .gte('created_at', startDate.toISOString())
+    .lte('created_at', endDate.toISOString())
+    .order('created_at', { ascending: false })
+    .limit(10000);
+
+  if (response.error) {
+    return {
+      records: [],
+      warnings: [`Supabase reporting read skipped ${table}: ${response.error.message}`]
+    };
+  }
+
+  return {
+    records: response.data ?? [],
+    warnings: []
+  };
+}
+
+function resolveActivityDateRange(query = {}, now = new Date()) {
+  const endDate =
+    normalizeDateInput(query.endDate ?? query.to ?? query.until) ??
+    new Date(now);
+  const startDate =
+    normalizeDateInput(query.startDate ?? query.from ?? query.since) ??
+    addDays(endDate, -30);
+
+  return {
+    startDate,
+    endDate: endOfDay(endDate)
+  };
+}
+
+function normalizeDateInput(value) {
+  if (!value) {
+    return null;
+  }
+
+  const date = value instanceof Date ? value : new Date(value);
+
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function endOfDay(value) {
+  const date = normalizeDateInput(value) ?? new Date();
+  date.setHours(23, 59, 59, 999);
+  return date;
+}
+
+function addDays(value, days) {
+  const source = normalizeDateInput(value) ?? new Date();
+  const date = new Date(source.getTime());
+  date.setDate(date.getDate() + days);
+  return date;
 }
 
 export function attachReportingReadMetadata({

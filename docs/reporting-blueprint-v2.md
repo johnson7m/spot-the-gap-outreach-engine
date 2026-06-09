@@ -2,7 +2,8 @@
 
 This document defines the reporting architecture for the Visible Gap Workspace.
 Phase 1 implements read-only backend reporting endpoints for executive and queue
-health metrics. Later phases remain planning-only until explicitly implemented.
+health metrics. Phase 2 implements read-only rep-performance reporting. Later
+phases remain planning-only until explicitly implemented.
 Reporting does not perform CRM writes, schema migrations, dashboard UI changes,
 or assessment webhook changes.
 
@@ -12,15 +13,19 @@ Implemented read-only endpoints:
 
 - `GET /api/reporting/executive`
 - `GET /api/reporting/queue-health`
+- `GET /api/reporting/rep-performance`
 
 Implemented read-only diagnostic scripts:
 
 - `npm run reporting:executive`
 - `npm run reporting:queue-health`
+- `npm run reporting:rep-performance`
 
-Phase 1 reuses the same Twenty source reads, queue read cache/degraded handling,
-test-record hiding, owner scope rules, queue classification, coverage audit, and
-overdue metadata used by the queue endpoints.
+Phase 1/2 reporting reuses the same Twenty source reads, queue read
+cache/degraded handling, test-record hiding, owner scope rules, queue
+classification, coverage audit, and overdue metadata used by the queue
+endpoints. Rep Performance additionally reads Supabase `outbound_events`,
+`crm_sync_logs`, and `assessment_submissions` when Supabase is configured.
 
 ## Reporting Principles
 
@@ -262,37 +267,74 @@ Response contract:
 
 ### GET /api/reporting/rep-performance
 
-Purpose: rep-level activity, workload, and conversion reporting.
+Purpose: Phase 2 rep-level ownership, workload, activity, and early conversion
+reporting.
 
 Response contract:
 
 ```json
 {
   "data": {
-    "range": { "from": "2026-06-01", "to": "2026-06-30" },
-    "groupBy": "rep",
-    "reps": [
-      {
-        "ownerEmail": "chandler@visiblegap.com",
-        "ownerName": "Chandler Johnson",
-        "tasksCompleted": 0,
+    "reportName": "rep-performance",
+    "generatedAt": "2026-06-09T00:00:00.000Z",
+    "ownerScope": "all",
+    "assigneeScope": "all",
+    "dateRange": {
+      "startDate": "2026-05-10T00:00:00.000Z",
+      "endDate": "2026-06-09T23:59:59.999Z"
+    },
+    "metrics": {
+      "totals": {
+        "leadsOwned": 0,
+        "openTasksAssigned": 0,
+        "overdueTasksAssigned": 0,
         "tasksCreated": 0,
-        "tasksOverdue": 0,
+        "tasksCompleted": 0,
         "touchesSent": 0,
         "responses": 0,
+        "noResponses": 0,
         "discoveryRequests": 0,
-        "discoveryConversions": 0,
-        "assessmentsRequested": 0,
-        "assessmentsCompleted": 0,
-        "leadOwnershipCount": 0
-      }
-    ],
-    "weekly": [],
-    "monthly": [],
+        "assessmentRequests": 0,
+        "assessmentCompletions": 0,
+        "activeLeadCount": 0,
+        "followUpCount": 0,
+        "freshLeadCount": 0,
+        "pipelineReviewCount": 0
+      },
+      "reps": [
+        {
+          "repKey": "chandler@visiblegap.com",
+          "ownerEmail": "chandler@visiblegap.com",
+          "ownerName": "Chandler Johnson",
+          "source": "person_owner",
+          "metrics": {}
+        }
+      ]
+    },
+    "status": "ok",
+    "isPartial": false,
+    "partialReason": null,
+    "retryAfterSeconds": null,
+    "diagnostics": {},
     "warnings": []
   }
 }
 ```
+
+Supported query params:
+
+- `ownerScope=mine|all`
+- `assigneeScope=mine|all`
+- `startDate=YYYY-MM-DD`
+- `endDate=YYYY-MM-DD`
+- `includeDiagnostics=true|false`
+
+Current-state metrics come from Twenty People owner and Twenty Tasks assignee.
+Date-window activity metrics come from Task dates plus Supabase
+`outbound_events` and `assessment_submissions` when configured. `crm_sync_logs`
+are loaded for diagnostics/future reliability metrics, but Task creation totals
+prefer Twenty Task `createdAt` and outbound task-created events to avoid double
+counting the same write audit.
 
 ### GET /api/reporting/queue-health
 
@@ -432,7 +474,9 @@ queue snapshots are required yet.
 
 ### Phase 2: Valuable
 
-Add trend and conversion reporting after the current-state dashboard is stable:
+Rep Performance is now implemented as a read-only current-state plus recent
+activity report. Remaining Phase 2 work adds trend and conversion reporting
+after the current-state dashboard is stable:
 
 1. Persist daily queue snapshots for queue growth and velocity.
 2. Add weekly/monthly rep breakdowns.
@@ -489,10 +533,10 @@ AI guardrails:
    assessment submissions, and current CRM state.
 3. Implement `GET /api/reporting/queue-health` using queue summary and Pipeline
    Review reasons.
-4. Implement `GET /api/reporting/operations` using `crm_sync_logs` and
+4. Implement `GET /api/reporting/rep-performance` with current-owner attribution
+   plus recent event-time attribution where available.
+5. Implement `GET /api/reporting/operations` using `crm_sync_logs` and
    `outbound_events`.
-5. Implement `GET /api/reporting/rep-performance` with current-owner attribution
-   first, then event-time attribution where available.
 6. Implement `GET /api/reporting/cadence-analytics` after cadence event payloads
    are verified for stage/type consistency.
 7. Wire the workspace reporting page to Phase 1 endpoints.

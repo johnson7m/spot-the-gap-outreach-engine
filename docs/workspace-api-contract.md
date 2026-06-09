@@ -1243,6 +1243,7 @@ Endpoints require Supabase workspace JWT auth and role `admin`, `operator`, or
 ```text
 GET /api/reporting/executive?ownerScope=all&includeDiagnostics=true
 GET /api/reporting/queue-health?ownerScope=all&includeDiagnostics=true
+GET /api/reporting/rep-performance?ownerScope=all&startDate=2026-06-01&endDate=2026-06-30
 ```
 
 Common response envelope:
@@ -1298,6 +1299,33 @@ Common response envelope:
 - `unresolvedReviewItems`
 - `unassignedTasks`
 - `hiddenTestRecords`
+
+`GET /api/reporting/rep-performance` returns:
+
+- `dateRange`
+- `metrics.totals`
+- `metrics.reps[]`
+- per-rep `leadsOwned`
+- per-rep `openTasksAssigned`
+- per-rep `overdueTasksAssigned`
+- per-rep `tasksCreated`
+- per-rep `tasksCompleted`
+- per-rep `touchesSent`
+- per-rep `responses`
+- per-rep `noResponses`
+- per-rep `discoveryRequests`
+- per-rep `assessmentRequests`
+- per-rep `assessmentCompletions`
+- per-rep `activeLeadCount`
+- per-rep `followUpCount`
+- per-rep `freshLeadCount`
+- per-rep `pipelineReviewCount`
+
+Rep Performance supports `ownerScope=mine|all`, `startDate`, `endDate`, and
+`includeDiagnostics`. It defaults to the last 30 days. Current ownership and
+task load come from Twenty. Recent activity comes from Task dates plus Supabase
+`outbound_events` and `assessment_submissions` when configured. Missing
+owner/assignee records are grouped under `repKey="missing_owner"`.
 
 When critical Twenty reads are rate-limited or degraded, reporting mirrors the
 queue API degraded contract:

@@ -2,6 +2,7 @@ import express from 'express';
 import { requireWorkspaceAuth } from '../../middleware/supabaseWorkspaceAuth.js';
 import { getExecutiveReportingWorkflow } from '../../workflows/reporting/getExecutiveReportingWorkflow.js';
 import { getQueueHealthReportingWorkflow } from '../../workflows/reporting/getQueueHealthReportingWorkflow.js';
+import { getRepPerformanceReportingWorkflow } from '../../workflows/reporting/getRepPerformanceReportingWorkflow.js';
 
 const REPORTING_WORKSPACE_ROLES = ['admin', 'operator', 'rep'];
 
@@ -10,8 +11,10 @@ export function createReportingApiRouter({
   log,
   getExecutiveReportingWorkflowFn = getExecutiveReportingWorkflow,
   getQueueHealthReportingWorkflowFn = getQueueHealthReportingWorkflow,
+  getRepPerformanceReportingWorkflowFn = getRepPerformanceReportingWorkflow,
   workspaceAuthSupabaseClient,
-  dataSource
+  dataSource,
+  activitySource
 } = {}) {
   const router = express.Router();
 
@@ -47,6 +50,25 @@ export function createReportingApiRouter({
         log,
         getQueueHealthReportingWorkflowFn,
         dataSource
+      });
+    }
+  );
+
+  router.get(
+    '/rep-performance',
+    requireWorkspaceAuth({
+      config,
+      log,
+      allowedRoles: REPORTING_WORKSPACE_ROLES,
+      supabaseClient: workspaceAuthSupabaseClient
+    }),
+    async (req, res, next) => {
+      await handleRepPerformanceReportingFetch(req, res, next, {
+        config,
+        log,
+        getRepPerformanceReportingWorkflowFn,
+        dataSource,
+        activitySource
       });
     }
   );
@@ -99,6 +121,35 @@ export async function handleQueueHealthReportingFetch(
       log: req.log ?? log,
       workspaceUser: req.workspaceUser,
       dataSource,
+      correlationId: req.correlationId
+    });
+
+    res.json(successEnvelope({ correlationId: req.correlationId, data: result, warnings: result.warnings }));
+  } catch (error) {
+    handleReportingError(error, req, res, next);
+  }
+}
+
+export async function handleRepPerformanceReportingFetch(
+  req,
+  res,
+  next,
+  {
+    config = {},
+    log,
+    getRepPerformanceReportingWorkflowFn = getRepPerformanceReportingWorkflow,
+    dataSource,
+    activitySource
+  } = {}
+) {
+  try {
+    const result = await getRepPerformanceReportingWorkflowFn({
+      query: req.query ?? {},
+      config,
+      log: req.log ?? log,
+      workspaceUser: req.workspaceUser,
+      dataSource,
+      activitySource,
       correlationId: req.correlationId
     });
 

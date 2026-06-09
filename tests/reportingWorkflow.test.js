@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { requireWorkspaceAuth } from '../src/middleware/supabaseWorkspaceAuth.js';
 import {
   handleExecutiveReportingFetch,
-  handleQueueHealthReportingFetch
+  handleQueueHealthReportingFetch,
+  handleRepPerformanceReportingFetch
 } from '../src/routes/api/reportingRoutes.js';
 import { processAssessmentSubmission } from '../src/workflows/assessmentWorkflow.js';
 import { getExecutiveReportingWorkflow } from '../src/workflows/reporting/getExecutiveReportingWorkflow.js';
 import { getQueueHealthReportingWorkflow } from '../src/workflows/reporting/getQueueHealthReportingWorkflow.js';
+import { getRepPerformanceReportingWorkflow } from '../src/workflows/reporting/getRepPerformanceReportingWorkflow.js';
 import sampleAssessment from '../data/sample-netlify-assessment-submission.json' with { type: 'json' };
 
 const baseConfig = {
@@ -49,6 +51,11 @@ const adminUser = {
   role: 'admin',
   roleSource: 'profile',
   profileId: 'profile-1'
+};
+
+const repUser = {
+  ...adminUser,
+  role: 'rep'
 };
 
 describe('reporting workflows', () => {
@@ -177,6 +184,236 @@ describe('reporting workflows', () => {
     });
   });
 
+  it('returns rep performance metrics by owner and activity source', async () => {
+    const result = await getRepPerformanceReportingWorkflow({
+      query: {
+        ownerScope: 'all',
+        assigneeScope: 'all',
+        startDate: '2026-06-01',
+        endDate: '2026-06-09',
+        includeDiagnostics: true
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeReportingDataSource({
+        tasks: reportingTasksWithActivityDates()
+      }),
+      activitySource: fakeActivitySource(),
+      now: new Date('2026-06-09T15:00:00.000Z')
+    });
+    const rep = result.metrics.reps.find((candidate) => candidate.ownerEmail === 'rep@visiblegap.com');
+    const missing = result.metrics.reps.find((candidate) => candidate.repKey === 'missing_owner');
+
+    expect(result).toMatchObject({
+      reportName: 'rep-performance',
+      status: 'ok',
+      dateRange: {
+        startDate: '2026-06-01T00:00:00.000Z'
+      }
+    });
+    expect(new Date(result.dateRange.endDate).toISOString().startsWith('2026-06-09')).toBe(
+      true
+    );
+    expect(rep.metrics).toMatchObject({
+      leadsOwned: 5,
+      activeLeadCount: 4,
+      freshLeadCount: 1,
+      followUpCount: 1,
+      pipelineReviewCount: 0,
+      openTasksAssigned: 3,
+      overdueTasksAssigned: 2,
+      tasksCreated: 2,
+      tasksCompleted: 2,
+      touchesSent: 2,
+      responses: 1,
+      noResponses: 0,
+      discoveryRequests: 1,
+      assessmentRequests: 1,
+      assessmentCompletions: 1
+    });
+    expect(missing.metrics).toMatchObject({
+      leadsOwned: 1,
+      activeLeadCount: 1,
+      pipelineReviewCount: 1
+    });
+    expect(result.metrics.totals.leadsOwned).toBe(6);
+    expect(result.diagnostics.sourceCounts).toMatchObject({
+      outboundEvents: 5,
+      crmSyncLogs: 2,
+      assessmentSubmissions: 2
+    });
+  });
+
+  it('filters rep activity by date range', async () => {
+    const result = await getRepPerformanceReportingWorkflow({
+      query: {
+        ownerScope: 'all',
+        assigneeScope: 'all',
+        startDate: '2026-06-07',
+        endDate: '2026-06-09'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeReportingDataSource({
+        tasks: reportingTasksWithActivityDates()
+      }),
+      activitySource: fakeActivitySource(),
+      now: new Date('2026-06-09T15:00:00.000Z')
+    });
+    const rep = result.metrics.reps.find((candidate) => candidate.ownerEmail === 'rep@visiblegap.com');
+
+    expect(rep.metrics.tasksCreated).toBe(1);
+    expect(rep.metrics.tasksCompleted).toBe(1);
+    expect(rep.metrics.discoveryRequests).toBe(1);
+    expect(rep.metrics.assessmentRequests).toBe(0);
+    expect(rep.metrics.assessmentCompletions).toBe(1);
+  });
+
+  it('resolves task assignee workspace member IDs to rep email buckets', async () => {
+    const result = await getRepPerformanceReportingWorkflow({
+      query: {
+        ownerScope: 'all',
+        assigneeScope: 'all'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeReportingDataSource({
+        people: [],
+        tasks: [
+          reportingTask('tasks-member-assigned', {
+            assigneeId: 'workspace-member-rep',
+            assignee: null
+          })
+        ],
+        taskTargets: [],
+        workspaceMembers: [
+          {
+            id: 'workspace-member-rep',
+            userEmail: 'rep@visiblegap.com',
+            name: {
+              firstName: 'Visible Gap',
+              lastName: 'Rep'
+            }
+          }
+        ]
+      }),
+      activitySource: fakeActivitySource({
+        outboundEvents: [],
+        crmSyncLogs: [],
+        assessmentSubmissions: []
+      }),
+      now: new Date('2026-06-09T15:00:00.000Z')
+    });
+
+    const rep = result.metrics.reps.find((candidate) => candidate.ownerEmail === 'rep@visiblegap.com');
+
+    expect(rep).toBeTruthy();
+    expect(rep.metrics.openTasksAssigned).toBe(1);
+  });
+
+  it('scopes rep performance to mine while preserving the missing-owner bucket', async () => {
+    const result = await getRepPerformanceReportingWorkflow({
+      query: {
+        ownerScope: 'all',
+        assigneeScope: 'all',
+        startDate: '2026-06-01',
+        endDate: '2026-06-09'
+      },
+      config: baseConfig,
+      workspaceUser: repUser,
+      dataSource: fakeReportingDataSource({
+        people: [
+          ...reportingPeople(),
+          reportingLead('people-other-owner', {
+            owner: {
+              userEmail: 'other@visiblegap.com',
+              name: 'Other Rep'
+            }
+          })
+        ],
+        tasks: [
+          ...reportingTasksWithActivityDates(),
+          reportingTask('tasks-other-owner', {
+            assignee: {
+              userEmail: 'other@visiblegap.com'
+            }
+          })
+        ]
+      }),
+      activitySource: fakeActivitySource(),
+      now: new Date('2026-06-09T15:00:00.000Z')
+    });
+
+    expect(result.ownerScope).toBe('mine');
+    expect(result.metrics.reps.map((rep) => rep.repKey)).toEqual(
+      expect.arrayContaining(['rep@visiblegap.com', 'missing_owner'])
+    );
+    expect(result.metrics.reps.map((rep) => rep.repKey)).not.toContain('other@visiblegap.com');
+  });
+
+  it('returns the reporting API envelope for rep performance', async () => {
+    const response = await invokeReportingRoute({
+      type: 'rep-performance',
+      headers: {
+        authorization: 'Bearer valid-token'
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({
+      ok: true,
+      correlationId: 'reporting-route-correlation',
+      data: {
+        reportName: 'rep-performance',
+        metrics: {
+          totals: expect.any(Object),
+          reps: expect.any(Array)
+        }
+      },
+      errors: []
+    });
+  });
+
+  it('uses read-only reporting sources without write methods', async () => {
+    const readOnlySource = fakeReportingDataSource();
+    const readOnlyActivity = fakeActivitySource();
+    let sourceReadCount = 0;
+    let activityReadCount = 0;
+    const wrappedSource = {
+      provider: readOnlySource.provider,
+      async listAllQueueRecords(input) {
+        sourceReadCount += 1;
+        return readOnlySource.listAllQueueRecords(input);
+      },
+      async appendOutboundEvent() {
+        throw new Error('Reporting must not write outbound events.');
+      }
+    };
+    const wrappedActivity = {
+      async listReportingActivityRecords(input) {
+        activityReadCount += 1;
+        return readOnlyActivity.listReportingActivityRecords(input);
+      },
+      async appendCrmSyncLog() {
+        throw new Error('Reporting must not write CRM sync logs.');
+      }
+    };
+
+    await getRepPerformanceReportingWorkflow({
+      query: {
+        ownerScope: 'all'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: wrappedSource,
+      activitySource: wrappedActivity,
+      now: new Date('2026-06-09T15:00:00.000Z')
+    });
+
+    expect(sourceReadCount).toBe(1);
+    expect(activityReadCount).toBe(1);
+  });
+
   it('reports degraded status instead of empty metrics when critical reporting reads fail', async () => {
     const result = await getExecutiveReportingWorkflow({
       query: {
@@ -259,6 +496,15 @@ async function invokeReportingRoute({
     });
   }
 
+  if (authenticated && type === 'rep-performance') {
+    await handleRepPerformanceReportingFetch(req, res, next, {
+      config,
+      log: silentLog,
+      dataSource: fakeReportingDataSource(),
+      activitySource: fakeActivitySource()
+    });
+  }
+
   if (res.error) {
     throw res.error;
   }
@@ -277,7 +523,7 @@ function fakeReportingDataSource(overrides = {}) {
         taskTargets: overrides.taskTargets ?? reportingTaskTargets(),
         noteTargets: [],
         timelineActivities: [],
-        workspaceMembers: [],
+        workspaceMembers: overrides.workspaceMembers ?? [],
         warnings: [],
         readStatus: {
           status: 'ok',
@@ -309,6 +555,19 @@ function degradedReportingDataSource() {
           criticalFailures: ['people'],
           nonCriticalFailures: []
         }
+      };
+    }
+  };
+}
+
+function fakeActivitySource(overrides = {}) {
+  return {
+    async listReportingActivityRecords() {
+      return {
+        outboundEvents: overrides.outboundEvents ?? reportingOutboundEvents(),
+        crmSyncLogs: overrides.crmSyncLogs ?? reportingCrmSyncLogs(),
+        assessmentSubmissions: overrides.assessmentSubmissions ?? reportingAssessmentSubmissions(),
+        warnings: overrides.warnings ?? []
       };
     }
   };
@@ -427,6 +686,169 @@ function reportingTasks() {
         markdown: 'No Person ID marker.'
       }
     })
+  ];
+}
+
+function reportingTasksWithActivityDates() {
+  return [
+    reportingTask('tasks-fresh', {
+      title: 'Send relationship-oriented connection request',
+      dueAt: '2026-06-01',
+      createdAt: '2026-06-02T10:00:00.000Z',
+      bodyV2: {
+        markdown: [
+          'Person ID: people-fresh',
+          'Cadence: RELATIONSHIP_BUILDING_V1',
+          'Cadence stage: CONNECTION_REQUEST',
+          'Task type: connection_request'
+        ].join('\n')
+      }
+    }),
+    reportingTask('tasks-follow', {
+      title: 'Send contextual introduction',
+      dueAt: '2026-06-01',
+      createdAt: '2026-05-20T10:00:00.000Z',
+      bodyV2: {
+        markdown: [
+          'Person ID: people-follow',
+          'Cadence: RELATIONSHIP_BUILDING_V1',
+          'Next cadence stage: INTRO_MESSAGE',
+          'Latest touch status: SENT'
+        ].join('\n')
+      }
+    }),
+    reportingTask('tasks-unassigned', {
+      title: 'Review orphaned CRM task',
+      dueAt: '2026-06-12',
+      createdAt: '2026-06-08T10:00:00.000Z',
+      bodyV2: {
+        markdown: 'No Person ID marker.'
+      }
+    })
+  ];
+}
+
+function reportingOutboundEvents() {
+  return [
+    {
+      id: 'event-task-completed-response',
+      event_type: 'task_completed',
+      status: 'sent',
+      created_at: '2026-06-02T12:00:00.000Z',
+      payload: {
+        workspaceUser: {
+          email: 'rep@visiblegap.com',
+          fullName: 'Visible Gap Rep'
+        },
+        completion: {
+          touchStatus: 'RESPONDED'
+        }
+      }
+    },
+    {
+      id: 'event-task-completed-no-response',
+      event_type: 'task_completed',
+      created_at: '2026-05-20T12:00:00.000Z',
+      payload: {
+        workspaceUser: {
+          email: 'rep@visiblegap.com',
+          fullName: 'Visible Gap Rep'
+        },
+        completion: {
+          touchStatus: 'NO_RESPONSE'
+        }
+      }
+    },
+    {
+      id: 'event-discovery',
+      event_type: 'task_completed',
+      created_at: '2026-06-08T12:00:00.000Z',
+      payload: {
+        workspaceUser: {
+          email: 'rep@visiblegap.com',
+          fullName: 'Visible Gap Rep'
+        },
+        nextCadenceStage: 'DISCOVERY_ASK'
+      }
+    },
+    {
+      id: 'event-assessment-request',
+      event_type: 'assessment_requested',
+      created_at: '2026-06-03T12:00:00.000Z',
+      payload: {
+        workspaceUser: {
+          email: 'rep@visiblegap.com',
+          fullName: 'Visible Gap Rep'
+        }
+      }
+    },
+    {
+      id: 'event-old-task-created',
+      event_type: 'missing_next_task_created',
+      created_at: '2026-05-01T12:00:00.000Z',
+      payload: {
+        workspaceUser: {
+          email: 'rep@visiblegap.com',
+          fullName: 'Visible Gap Rep'
+        }
+      }
+    }
+  ];
+}
+
+function reportingCrmSyncLogs() {
+  return [
+    {
+      id: 'log-task-created',
+      object_name: 'task',
+      action: 'create',
+      status: 'succeeded',
+      created_at: '2026-06-04T12:00:00.000Z',
+      request_payload: {
+        workspaceUser: {
+          email: 'rep@visiblegap.com',
+          fullName: 'Visible Gap Rep'
+        }
+      }
+    },
+    {
+      id: 'log-old-task-created',
+      object_name: 'task',
+      action: 'create',
+      status: 'succeeded',
+      created_at: '2026-05-01T12:00:00.000Z',
+      request_payload: {
+        workspaceUser: {
+          email: 'rep@visiblegap.com',
+          fullName: 'Visible Gap Rep'
+        }
+      }
+    }
+  ];
+}
+
+function reportingAssessmentSubmissions() {
+  return [
+    {
+      id: 'assessment-submission-current',
+      created_at: '2026-06-08T14:00:00.000Z',
+      normalized_payload: {
+        workspaceUser: {
+          email: 'rep@visiblegap.com',
+          fullName: 'Visible Gap Rep'
+        }
+      }
+    },
+    {
+      id: 'assessment-submission-old',
+      created_at: '2026-05-01T14:00:00.000Z',
+      normalized_payload: {
+        workspaceUser: {
+          email: 'rep@visiblegap.com',
+          fullName: 'Visible Gap Rep'
+        }
+      }
+    }
   ];
 }
 
