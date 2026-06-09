@@ -303,6 +303,10 @@ Queue coverage audit:
 - Pipeline Review-only records carry explicit `exclusionReasons` so the team can
   see whether the person needs normalization, enrichment, a missing task, manual
   review, or a new queue rule.
+- The Pipeline Review endpoint defaults to final Pipeline Review records only.
+  `includeAllReviewed=true` or `includeDiagnostics=true` can reveal every Person
+  with review warnings, but those diagnostic records do not drive the normal tab
+  count.
 
 Manual lead normalization diagnostics:
 

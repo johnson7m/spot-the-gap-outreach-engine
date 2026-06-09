@@ -236,7 +236,9 @@ export async function getOutboundQueueSummaryWorkflow({
       queueReadStatus: readStatus,
       staleCacheGuidance: readStatus.staleCacheGuidance,
       duplicateMultiQueueCandidateCount: coverage.summary.duplicateMultiQueueCandidateCount,
-      countsByExclusionReason: coverage.summary.countsByExclusionReason
+      countsByExclusionReason: coverage.summary.countsByExclusionReason,
+      reviewedPeopleCount: queues['pipeline-review'].diagnostics?.reviewedPeopleCount ?? null,
+      finalPipelineReviewCount: queues['pipeline-review'].diagnostics?.finalPipelineReviewCount ?? null
     },
     warnings: uniqueStrings([
       ...queueWarnings,

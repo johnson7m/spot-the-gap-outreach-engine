@@ -1248,6 +1248,93 @@ describe('outbound queue workflow', () => {
     });
   });
 
+  it('keeps Pipeline Review totalCount scoped to final Pipeline Review records by default', async () => {
+    const { people, tasks } = pipelineReviewPrecedenceFixture();
+    const result = await getOutboundQueueWorkflow({
+      queueSlug: 'pipeline-review',
+      query: {
+        ownerScope: 'all'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({ people, tasks }),
+      now: new Date('2026-06-08T15:00:00.000Z')
+    });
+
+    expect(result.totalCount).toBe(1);
+    expect(result.items.map((item) => item.personId)).toEqual(['people-final-pipeline-review']);
+    expect(result.diagnostics).toMatchObject({
+      reviewedPeopleCount: 5,
+      finalPipelineReviewCount: 1
+    });
+  });
+
+  it('can expose all reviewed People in Pipeline Review diagnostics mode', async () => {
+    const { people, tasks } = pipelineReviewPrecedenceFixture();
+    const result = await getOutboundQueueWorkflow({
+      queueSlug: 'pipeline-review',
+      query: {
+        ownerScope: 'all',
+        includeAllReviewed: 'true'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({ people, tasks }),
+      now: new Date('2026-06-08T15:00:00.000Z')
+    });
+
+    expect(result.totalCount).toBe(5);
+    expect(result.items.map((item) => item.personId)).toEqual(
+      expect.arrayContaining([
+        'people-final-fresh-review',
+        'people-final-follow-review',
+        'people-final-warm-review',
+        'people-final-stale-review',
+        'people-final-pipeline-review'
+      ])
+    );
+    expect(result.diagnostics).toMatchObject({
+      reviewedPeopleCount: 5,
+      finalPipelineReviewCount: 1
+    });
+
+    const diagnosticsResult = await getOutboundQueueWorkflow({
+      queueSlug: 'pipeline-review',
+      query: {
+        ownerScope: 'all',
+        includeDiagnostics: 'true'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({ people, tasks }),
+      now: new Date('2026-06-08T15:00:00.000Z')
+    });
+
+    expect(diagnosticsResult.totalCount).toBe(5);
+  });
+
+  it('keeps Pipeline Review endpoint count aligned with coverage audit final disposition', async () => {
+    const { people, tasks } = pipelineReviewPrecedenceFixture();
+    const queue = await getOutboundQueueWorkflow({
+      queueSlug: 'pipeline-review',
+      query: {
+        ownerScope: 'all'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({ people, tasks }),
+      now: new Date('2026-06-08T15:00:00.000Z')
+    });
+    const audit = buildQueueCoverageAudit({
+      people,
+      tasks,
+      now: new Date('2026-06-08T15:00:00.000Z')
+    });
+
+    expect(queue.totalCount).toBe(audit.summary.countsByDisposition.pipeline_review);
+    expect(queue.totalCount).toBe(1);
+  });
+
   it('hides obvious test records by default and includes them only when requested', async () => {
     const testPerson = {
       ...queuePeople()[0],
@@ -1319,7 +1406,8 @@ describe('outbound queue workflow', () => {
       queueSlug: 'pipeline-review',
       query: {
         ownerScope: 'all',
-        includeTestRecords: 'true'
+        includeTestRecords: 'true',
+        includeAllReviewed: 'true'
       },
       config: baseConfig,
       workspaceUser: adminUser,
@@ -2158,6 +2246,29 @@ describe('queue summary API', () => {
       errors: []
     });
   });
+
+  it('returns Pipeline Review count as final Pipeline Review disposition count', async () => {
+    const { people, tasks } = pipelineReviewPrecedenceFixture();
+    const response = await invokeQueueSummaryRoute({
+      headers: {
+        authorization: 'Bearer valid-token'
+      },
+      query: {
+        ownerScope: 'all'
+      },
+      dependencies: {
+        dataSource: fakeQueueDataSource({ people, tasks })
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body.data.counts.pipelineReview).toBe(1);
+    expect(response.body.data.countsByDisposition.pipeline_review).toBe(1);
+    expect(response.body.data.diagnostics).toMatchObject({
+      reviewedPeopleCount: 5,
+      finalPipelineReviewCount: 1
+    });
+  });
 });
 
 describe('missing next-task planner', () => {
@@ -2565,6 +2676,58 @@ async function invokeQueueSummaryRoute({
   }
 
   return res;
+}
+
+function pipelineReviewPrecedenceFixture() {
+  return {
+    people: [
+      queueLead('people-final-fresh-review', {
+        cadenceStage: 'CONNECTION_REQUEST',
+        latestTouchStatus: 'DRAFTED',
+        enrichmentStatus: 'PARTIAL'
+      }),
+      queueLead('people-final-follow-review', {
+        cadenceStage: 'INTRO_MESSAGE',
+        latestTouchStatus: 'SENT',
+        enrichmentStatus: 'PARTIAL'
+      }),
+      queueLead('people-final-warm-review', {
+        assessmentCompleted: true,
+        leadstageAuto: 'ASSESSMENT_COMPLETED',
+        enrichmentStatus: 'PARTIAL'
+      }),
+      queueLead('people-final-stale-review', {
+        cadenceStage: 'VALUE_TOUCH',
+        latestTouchStatus: 'NO_RESPONSE',
+        staleRisk: 'STALE',
+        enrichmentStatus: 'PARTIAL'
+      }),
+      queueLead('people-final-pipeline-review', {
+        cadenceStage: 'VALUE_TOUCH',
+        latestTouchStatus: 'RESPONDED',
+        enrichmentStatus: 'PARTIAL'
+      })
+    ],
+    tasks: [
+      queueTask('tasks-final-fresh-review', {
+        personId: 'people-final-fresh-review',
+        title: 'Send relationship-oriented connection request'
+      }),
+      queueTask('tasks-final-follow-review', {
+        personId: 'people-final-follow-review',
+        title: 'Send contextual introduction',
+        dueAt: '2026-06-08',
+        bodyV2: {
+          markdown: [
+            'Person ID: people-final-follow-review',
+            'Cadence: RELATIONSHIP_BUILDING_V1',
+            'Next cadence stage: INTRO_MESSAGE',
+            'Latest touch status: SENT'
+          ].join('\n')
+        }
+      })
+    ]
+  };
 }
 
 function fakeQueueDataSource(overrides = {}) {

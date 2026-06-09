@@ -532,6 +532,17 @@ The audit explains Pipeline Review-only records with explicit reasons such as
 `missing_outbound_fields`, `missing_company`, `missing_email`, `missing_task`,
 `ready_for_normalization`, `manual_review`, or `no_action_rule_missing`.
 
+Pipeline Review endpoint semantics:
+
+- Default `GET /api/queues/pipeline-review` returns only People whose final
+  queue/disposition is Pipeline Review after queue precedence is applied.
+- `includeAllReviewed=true` or `includeDiagnostics=true` can reveal all reviewed
+  People for diagnostics, including records whose final queue is Fresh Leads,
+  Follow-Ups, Warm Assessments, or Stale Recovery.
+- `GET /api/queues/summary` exposes `diagnostics.reviewedPeopleCount` and
+  `diagnostics.finalPipelineReviewCount` so we can distinguish "reviewed by
+  Pipeline Review rules" from "final Pipeline Review tab count."
+
 Fresh vs Follow-Up classification:
 
 - Fresh Leads own first-touch work: `NOT_STARTED` or `CONNECTION_REQUEST`

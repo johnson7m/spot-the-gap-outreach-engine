@@ -1,4 +1,5 @@
 import { detectTestRecord } from '../utils/testRecordDetection.js';
+import { toProjectDateOnly } from '../utils/projectDate.js';
 
 const QUEUE_DEFINITIONS = {
   'fresh-leads': {
@@ -166,6 +167,16 @@ export function buildQueue({
     normalizedQuery.offset + normalizedQuery.limit
   );
   const hasMore = normalizedQuery.offset + pagedItems.length < scopedItems.length;
+  const diagnostics = buildQueueDiagnostics({
+    queueSlug,
+    people: visiblePeople,
+    tasks: normalizedTasks,
+    tasksByPersonId,
+    hiddenTestPersonIds,
+    hiddenTestRecords,
+    query: normalizedQuery,
+    now
+  });
 
   return {
     queueName: definition.name,
@@ -180,9 +191,7 @@ export function buildQueue({
     overdueCount: scopedItems.filter((item) => item.isOverdueTask).length,
     ownerScope: normalizedQuery.ownerScope,
     assigneeScope: normalizedQuery.assigneeScope,
-    diagnostics: {
-      hiddenTestRecords
-    },
+    diagnostics,
     warnings: uniqueStrings(warnings)
   };
 }
@@ -382,6 +391,47 @@ function toClassificationDiagnosticRow({ person, task, tasks = [], diagnostic, n
       .filter(Boolean),
     classificationReasons: diagnostic.classificationReasons
   };
+}
+
+function buildQueueDiagnostics({
+  queueSlug,
+  people = [],
+  tasks = [],
+  tasksByPersonId = new Map(),
+  hiddenTestPersonIds = new Set(),
+  hiddenTestRecords = 0,
+  query = {},
+  now = new Date()
+} = {}) {
+  const diagnostics = {
+    hiddenTestRecords
+  };
+
+  if (queueSlug !== 'pipeline-review') {
+    return diagnostics;
+  }
+
+  const allReviewedItems = selectQueueCandidates({
+    queueSlug: 'pipeline-review',
+    people,
+    tasks,
+    tasksByPersonId,
+    hiddenTestPersonIds,
+    query: {
+      ...query,
+      includeAllReviewed: true,
+      includeDiagnostics: true
+    },
+    warnings: [],
+    now
+  });
+
+  diagnostics.reviewedPeopleCount = allReviewedItems.length;
+  diagnostics.finalPipelineReviewCount = allReviewedItems.filter(
+    (item) => item.queuePrecedenceApplied === 'pipeline-review' && !getTerminalDisposition(item)
+  ).length;
+
+  return diagnostics;
 }
 
 function buildPersonQueueCandidateMap({
@@ -653,7 +703,7 @@ export function normalizeQueueQuery(query = {}, workspaceUser = {}) {
     ? Math.min(Math.max(Math.trunc(requestedLimit), 1), 100)
     : 50;
   const offset = Number.isFinite(requestedOffset) ? Math.max(Math.trunc(requestedOffset), 0) : 0;
-  const dueBefore = normalizeDateInput(query.dueBefore) ?? new Date();
+  const dueBefore = normalizeDateInput(query.dueBefore ?? toProjectDateOnly(new Date())) ?? new Date();
   const includeOverdue =
     query.includeOverdue === undefined ? true : normalizeBoolean(query.includeOverdue);
   const includeUnassigned =
@@ -662,6 +712,8 @@ export function normalizeQueueQuery(query = {}, workspaceUser = {}) {
     query.includeTestRecords === undefined ? false : normalizeBoolean(query.includeTestRecords);
   const includeDiagnostics =
     query.includeDiagnostics === undefined ? false : normalizeBoolean(query.includeDiagnostics);
+  const includeAllReviewed =
+    query.includeAllReviewed === undefined ? false : normalizeBoolean(query.includeAllReviewed);
   const requestedOwnerScope = normalizeSelect(query.requestedOwnerScope ?? query.ownerScope);
   const requestedAssigneeScope = normalizeSelect(query.requestedAssigneeScope ?? query.assigneeScope);
   const ownerScope =
@@ -688,6 +740,7 @@ export function normalizeQueueQuery(query = {}, workspaceUser = {}) {
     includeUnassigned,
     includeTestRecords,
     includeDiagnostics,
+    includeAllReviewed,
     ownerScope,
     requestedOwnerScope: requestedOwnerScope ? requestedOwnerScope.toLowerCase() : null,
     assigneeScope,
@@ -857,20 +910,29 @@ function selectQueueCandidates({
           };
         })
         .filter(({ reviewWarnings }) => reviewWarnings.length > 0)
-        .map(({ person, openTask, personTasks, reviewWarnings, reviewReasons, suggestedResolutionActions }) => toClassifiedQueueItem({
+        .map(({ person, openTask, personTasks, reviewWarnings, reviewReasons, suggestedResolutionActions }) => ({
           person,
-          task: openTask,
-          tasks: personTasks,
-          source: 'twenty:person',
-          itemWarnings: reviewWarnings,
-          reviewReasons,
-          suggestedResolutionActions,
-          queueClassification: getPipelineReviewClassification(reviewReasons),
-          queueClassificationReasons: reviewReasons,
-          queueSlug,
-          query,
-          now
-        }));
+          item: toClassifiedQueueItem({
+            person,
+            task: openTask,
+            tasks: personTasks,
+            source: 'twenty:person',
+            itemWarnings: reviewWarnings,
+            reviewReasons,
+            suggestedResolutionActions,
+            queueClassification: getPipelineReviewClassification(reviewReasons),
+            queueClassificationReasons: reviewReasons,
+            queueSlug,
+            query,
+            now
+          })
+        }))
+        .filter(({ person, item }) =>
+          query.includeAllReviewed || query.includeDiagnostics
+            ? true
+            : !getTerminalDisposition(person) && item.queuePrecedenceApplied === 'pipeline-review'
+        )
+        .map(({ item }) => item);
 
     default:
       return [];

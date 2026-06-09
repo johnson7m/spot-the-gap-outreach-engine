@@ -513,7 +513,12 @@ Supported query params:
 - `includeTestRecords`: default `false`; shows test/synthetic People for
   diagnostics.
 - `includeDiagnostics`: default `false`; adds queue classification diagnostics
-  to each item.
+  to each item. For Pipeline Review, this also reveals all reviewed People for
+  diagnostics instead of only final Pipeline Review dispositions.
+- `includeAllReviewed`: default `false`; applies to Pipeline Review and returns
+  all People with review warnings, including records whose final queue is Fresh
+  Leads, Follow-Ups, Warm Assessments, or Stale Recovery. The default endpoint
+  and tab count return only final Pipeline Review records.
 - `status`: optional Task status filter for `unassigned-tasks`.
 
 Response:
@@ -689,7 +694,9 @@ Response data:
     "timelinePaginationWarning": null,
     "queueReadStatus": {
       "status": "ok"
-    }
+    },
+    "reviewedPeopleCount": 313,
+    "finalPipelineReviewCount": 116
   },
   "warnings": []
 }
@@ -714,6 +721,13 @@ People coverage fields:
   `terminal_closed`, `active_client`, and `unclassified_needs_rule`.
 - `countsByFinalQueue`: final queue/precedence bucket, including pseudo-buckets
   such as `terminal_closed`, `active_client`, and `hidden_test_record`.
+- `counts.pipelineReview`: final Pipeline Review queue count. It should match
+  `countsByDisposition.pipeline_review` and the default
+  `GET /api/queues/pipeline-review` `totalCount`.
+- `diagnostics.reviewedPeopleCount`: all non-test People that had any Pipeline
+  Review warning during classification.
+- `diagnostics.finalPipelineReviewCount`: People whose final queue/disposition
+  is Pipeline Review after precedence is applied.
 
 Run `npm run queues:coverage-audit` for the full per-Person report. The audit
 writes `data/queue-coverage-audit.json` and
