@@ -533,8 +533,8 @@ This command is implemented but remains dry-run unless every live guard is set:
 ```bash
 MISSING_NEXT_TASK_APPLY_ENABLED=true \
 LIVE_TEST=true \
-MISSING_NEXT_TASK_BATCH_SIZE=10 \
-MISSING_NEXT_TASK_OFFSET=0 \
+MISSING_NEXT_TASK_APPLY_MODE=next_eligible \
+MISSING_NEXT_TASK_BATCH_SIZE=5 \
 npm run queues:apply-missing-next-tasks
 ```
 
@@ -542,6 +542,13 @@ Live apply rules:
 
 - Reads `MISSING_NEXT_TASK_PLAN_PATH`, default
   `data/missing-next-task-plan.json`.
+- `MISSING_NEXT_TASK_APPLY_MODE=next_eligible` ignores offset and selects the
+  first currently eligible safe rows each time. This is the recommended live
+  mode because the eligible set shrinks after successful batches.
+- `MISSING_NEXT_TASK_APPLY_MODE=offset` remains available for diagnostic
+  slicing and backward compatibility.
+- Output includes `remainingEligibleCount` and `nextRecommendedCommand`; when
+  `remainingEligibleCount=0`, the apply path stops cleanly with no next command.
 - Uses only `safeToCreate=true` rows by default.
 - Skips test/synthetic records unless
   `MISSING_NEXT_TASK_INCLUDE_TEST_RECORDS=true`.

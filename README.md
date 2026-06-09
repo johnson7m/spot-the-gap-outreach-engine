@@ -333,7 +333,7 @@ npm run queues:apply-missing-next-tasks
 Live missing next-task creation requires an explicit batch:
 
 ```bash
-MISSING_NEXT_TASK_APPLY_ENABLED=true LIVE_TEST=true MISSING_NEXT_TASK_BATCH_SIZE=10 MISSING_NEXT_TASK_OFFSET=0 npm run queues:apply-missing-next-tasks
+MISSING_NEXT_TASK_APPLY_ENABLED=true LIVE_TEST=true MISSING_NEXT_TASK_APPLY_MODE=next_eligible MISSING_NEXT_TASK_BATCH_SIZE=5 npm run queues:apply-missing-next-tasks
 ```
 
 Dry-run sent-initial follow-up apply:
@@ -392,6 +392,12 @@ Sent-initial apply rules:
 Apply rules:
 
 - reads local `data/missing-next-task-plan.json`
+- supports `MISSING_NEXT_TASK_APPLY_MODE=next_eligible`, which ignores offset
+  and selects the first currently eligible safe records for each batch
+- keeps `MISSING_NEXT_TASK_APPLY_MODE=offset` for diagnostics/backward
+  compatibility
+- returns `remainingEligibleCount` and a `nextRecommendedCommand`; when no
+  eligible rows remain, the next command is `null`
 - creates Tasks only for `safeToCreate=true` rows
 - skips test records unless `MISSING_NEXT_TASK_INCLUDE_TEST_RECORDS=true`
 - skips review records unless explicitly forced

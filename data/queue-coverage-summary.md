@@ -1,6 +1,6 @@
 # Queue Coverage Audit
 
-Generated at: 2026-06-09T00:31:20.622Z
+Generated at: 2026-06-09T01:24:22.357Z
 
 ## Summary
 
@@ -9,17 +9,17 @@ Generated at: 2026-06-09T00:31:20.622Z
 - Expected real People: 313
 - Accounted-for People: 313
 - Unclassified People: 0
-- Duplicate/multi-queue candidate count: 197
+- Duplicate/multi-queue candidate count: 158
 
 ## Counts By Final Queue
 
 | Value | Count |
 | --- | ---: |
 | active_client | 1 |
-| follow-ups | 93 |
+| follow-ups | 54 |
 | fresh-leads | 102 |
 | hidden_test_record | 11 |
-| pipeline-review | 116 |
+| pipeline-review | 155 |
 | warm-assessments | 1 |
 
 ## Counts By Disposition
@@ -27,10 +27,10 @@ Generated at: 2026-06-09T00:31:20.622Z
 | Value | Count |
 | --- | ---: |
 | active_client | 1 |
-| follow_up | 93 |
+| follow_up | 54 |
 | fresh_lead | 102 |
 | hidden_test_record | 11 |
-| pipeline_review | 116 |
+| pipeline_review | 155 |
 | warm_assessment | 1 |
 
 ## Counts By Exclusion Reason
@@ -38,10 +38,10 @@ Generated at: 2026-06-09T00:31:20.622Z
 | Value | Count |
 | --- | ---: |
 | active_client | 1 |
-| enrichment_partial | 116 |
-| missing_company | 7 |
-| missing_email | 70 |
-| missing_linkedin | 45 |
+| enrichment_partial | 155 |
+| missing_company | 12 |
+| missing_email | 92 |
+| missing_linkedin | 61 |
 | missing_next_task | 3 |
 
 ## Pipeline Review Only

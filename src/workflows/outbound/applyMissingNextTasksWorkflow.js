@@ -5,6 +5,7 @@ import { createOperationalStore } from '../../persistence/operationalStore.js';
 import { resolveSafeMissingNextTaskDueDate } from '../../utils/projectDate.js';
 
 const REPEATED_FAILURE_LIMIT = 2;
+const APPLY_MODES = new Set(['offset', 'next_eligible']);
 const OPEN_TASK_STATUSES = new Set(['TODO', 'OPEN', 'IN_PROGRESS', 'NOT_STARTED']);
 const EXCLUDED_STATES = new Set([
   'PAUSED',
@@ -38,8 +39,9 @@ export async function applyMissingNextTaskPlan({
     throw error;
   }
 
-  const selected = selectMissingNextTaskCandidates(plan, normalizedOptions);
-  const operations = selected.map((record) =>
+  let selection = selectMissingNextTaskCandidateBatch(plan, normalizedOptions);
+  let selected = selection.records;
+  let operations = selected.map((record) =>
     buildMissingNextTaskOperation({
       record,
       linkCompany: normalizedOptions.linkCompany,
@@ -47,35 +49,87 @@ export async function applyMissingNextTaskPlan({
       now
     })
   );
+  const currentSelectionWarnings = [];
+  const shouldCheckCurrentEligibility = normalizedOptions.applyMode === 'next_eligible';
+  let client = restClient;
+
+  if (shouldCheckCurrentEligibility) {
+    if (!config.twenty?.apiKey && !restClient) {
+      currentSelectionWarnings.push(
+        'MISSING_NEXT_TASK_APPLY_MODE=next_eligible could not check current Twenty Tasks/taskTargets because TWENTY_API_KEY is not configured; using plan-level eligibility only.'
+      );
+    } else {
+      client = restClient ?? createTwentyRestClient(config.twenty);
+      selection = await selectCurrentlyEligibleMissingNextTaskCandidateBatch({
+        client,
+        plan,
+        options: normalizedOptions
+      });
+      selected = selection.records;
+      operations = selected.map((record) =>
+        buildMissingNextTaskOperation({
+          record,
+          linkCompany: normalizedOptions.linkCompany,
+          allowPastDue: normalizedOptions.allowPastDue,
+          now
+        })
+      );
+    }
+  }
 
   if (!liveEnabled) {
+    const skippedCount = operations.filter((operation) => operation.status === 'skipped').length;
+    const dryRunSummary = summarizeMissingNextTaskOperationResults({
+      planned: operations.filter((operation) => operation.status === 'planned').length,
+      attempted: 0,
+      succeeded: 0,
+      failed: 0,
+      verificationFailed: 0,
+      skipped: skippedCount,
+      eligibleCount: selection.eligibleCount,
+      selectedCount: selection.selectedCount,
+      remainingEligibleCount: selection.remainingEligibleCount,
+      currentEligibleCount: selection.currentEligibleCount,
+      skippedExistingCount: selection.skippedExistingCount,
+      currentEligibilityChecked: selection.currentEligibilityChecked
+    });
+    const recommendedNextCommand = buildRecommendedNextCommand({
+      summary: dryRunSummary,
+      options: normalizedOptions
+    });
+
     return {
       status: 'dry_run',
       dryRun: true,
       liveEnabled: false,
       guard: buildGuardState(normalizedOptions),
-      summary: summarizeMissingNextTaskOperationResults({
-        planned: operations.filter((operation) => operation.status === 'planned').length,
-        attempted: 0,
-        succeeded: 0,
-        failed: 0,
-        verificationFailed: 0,
-        skipped: operations.filter((operation) => operation.status === 'skipped').length
-      }),
+      summary: dryRunSummary,
+      recommendedNextCommand,
+      nextRecommendedCommand: recommendedNextCommand,
+      eligibleCount: selection.eligibleCount,
+      selectedCount: selection.selectedCount,
+      remainingEligibleCount: selection.remainingEligibleCount,
+      currentEligibleCount: selection.currentEligibleCount,
+      skippedExistingCount: selection.skippedExistingCount,
+      currentEligibilityChecked: selection.currentEligibilityChecked,
       operations,
       warnings: [
-        'Missing next-task apply is in dry-run mode. Set MISSING_NEXT_TASK_APPLY_ENABLED=true, LIVE_TEST=true, and MISSING_NEXT_TASK_BATCH_SIZE to create Tasks.'
+        'Missing next-task apply is in dry-run mode. Set MISSING_NEXT_TASK_APPLY_ENABLED=true, LIVE_TEST=true, and MISSING_NEXT_TASK_BATCH_SIZE to create Tasks.',
+        ...currentSelectionWarnings
       ]
     };
   }
 
-  if (!config.twenty?.apiKey && !restClient) {
-    const error = new Error('TWENTY_API_KEY is required for live missing next-task apply.');
-    error.code = 'TWENTY_AUTH_MISSING';
-    throw error;
+  if (!client) {
+    if (!config.twenty?.apiKey) {
+      const error = new Error('TWENTY_API_KEY is required for live missing next-task apply.');
+      error.code = 'TWENTY_AUTH_MISSING';
+      throw error;
+    }
+
+    client = createTwentyRestClient(config.twenty);
   }
 
-  const client = restClient ?? createTwentyRestClient(config.twenty);
   const store = operationalStore ?? createOperationalStore({ config, log });
   const results = [];
   let consecutiveFailures = 0;
@@ -234,7 +288,11 @@ export async function applyMissingNextTaskPlan({
     }
   }
 
-  const summary = summarizeMissingNextTaskLiveResults(results);
+  const summary = summarizeMissingNextTaskLiveResults(results, selection);
+  const recommendedNextCommand = buildRecommendedNextCommand({
+    summary,
+    options: normalizedOptions
+  });
 
   return {
     status: summary.failed > 0 || summary.verificationFailed > 0 ? 'failed' : 'succeeded',
@@ -242,6 +300,14 @@ export async function applyMissingNextTaskPlan({
     liveEnabled: true,
     guard: buildGuardState(normalizedOptions),
     summary,
+    recommendedNextCommand,
+    nextRecommendedCommand: recommendedNextCommand,
+    eligibleCount: selection.eligibleCount,
+    selectedCount: selection.selectedCount,
+    remainingEligibleCount: selection.remainingEligibleCount,
+    currentEligibleCount: selection.currentEligibleCount,
+    skippedExistingCount: selection.skippedExistingCount,
+    currentEligibilityChecked: selection.currentEligibilityChecked,
     operations: results,
     warnings: config.supabase?.enabled
       ? []
@@ -259,6 +325,7 @@ export function normalizeMissingNextTaskApplyOptions(options = {}) {
     includeReview: toBoolean(options.includeReview),
     includeTestRecords: toBoolean(options.includeTestRecords),
     force: toBoolean(options.force),
+    applyMode: normalizeApplyMode(options.applyMode),
     linkCompany: toBoolean(options.linkCompany),
     allowPastDue: toBoolean(options.allowPastDue),
     batchSize: normalizePositiveInt(rawBatchSize, 5),
@@ -268,15 +335,83 @@ export function normalizeMissingNextTaskApplyOptions(options = {}) {
 }
 
 export function selectMissingNextTaskCandidates(plan = {}, options = {}) {
+  return selectMissingNextTaskCandidateBatch(plan, options).records;
+}
+
+export function selectMissingNextTaskCandidateBatch(plan = {}, options = {}) {
   const normalizedOptions = normalizeMissingNextTaskApplyOptions(options);
   const candidates = (plan.plans ?? []).filter((record) =>
     isEligibleMissingNextTaskRecord(record, normalizedOptions)
   );
+  const start = normalizedOptions.applyMode === 'next_eligible' ? 0 : normalizedOptions.offset;
+  const records = candidates.slice(start, start + normalizedOptions.batchSize);
 
-  return candidates.slice(
-    normalizedOptions.offset,
-    normalizedOptions.offset + normalizedOptions.batchSize
+  return {
+    records,
+    eligibleCount: candidates.length,
+    selectedCount: records.length,
+    remainingEligibleCount: Math.max(candidates.length - start - records.length, 0),
+    currentEligibleCount: null,
+    skippedExistingCount: null,
+    currentEligibilityChecked: false,
+    applyMode: normalizedOptions.applyMode,
+    offset: normalizedOptions.offset,
+    batchSize: normalizedOptions.batchSize
+  };
+}
+
+export async function selectCurrentlyEligibleMissingNextTaskCandidateBatch({
+  client,
+  plan = {},
+  options = {}
+} = {}) {
+  const normalizedOptions = normalizeMissingNextTaskApplyOptions({
+    ...options,
+    applyMode: 'next_eligible'
+  });
+  const candidates = (plan.plans ?? []).filter((record) =>
+    isEligibleMissingNextTaskRecord(record, normalizedOptions)
   );
+  const [tasks, taskTargets] = await Promise.all([
+    listAllRecords(client, 'tasks'),
+    listAllRecords(client, 'taskTargets')
+  ]);
+  const currentEligibleRecords = [];
+  let skippedExistingCount = 0;
+
+  for (const record of candidates) {
+    const dedupeKey = buildMissingNextTaskDedupeKey(record);
+    const existingTask = tasks.find((task) => taskBodyIncludesDedupeKey(task, dedupeKey));
+    const openTask = existingTask
+      ? null
+      : findOpenTaskForPersonFromRecords({
+          tasks,
+          taskTargets,
+          personId: record.personId
+        });
+
+    if (existingTask || openTask) {
+      skippedExistingCount += 1;
+      continue;
+    }
+
+    currentEligibleRecords.push(record);
+  }
+
+  const records = currentEligibleRecords.slice(0, normalizedOptions.batchSize);
+
+  return {
+    records,
+    eligibleCount: candidates.length,
+    selectedCount: records.length,
+    remainingEligibleCount: Math.max(currentEligibleRecords.length - records.length, 0),
+    currentEligibleCount: currentEligibleRecords.length,
+    skippedExistingCount,
+    currentEligibilityChecked: true,
+    applyMode: 'next_eligible',
+    offset: normalizedOptions.offset,
+    batchSize: normalizedOptions.batchSize
+  };
 }
 
 export function isEligibleMissingNextTaskRecord(record = {}, options = {}) {
@@ -329,12 +464,7 @@ export function buildMissingNextTaskOperation({
     dueDateAdjustmentReason:
       dueDate.dueDateAdjustmentReason ?? record.dueDateAdjustmentReason ?? null
   };
-  const dedupeKey = buildNextTaskDedupeKey({
-    personId: adjustedRecord.personId,
-    cadenceName: adjustedRecord.cadenceName,
-    nextCadenceStage: adjustedRecord.cadenceStage,
-    taskType: adjustedRecord.recommendedTaskType
-  });
+  const dedupeKey = buildMissingNextTaskDedupeKey(adjustedRecord);
   const taskPayload = buildMissingNextTaskPayload({
     record: adjustedRecord,
     dedupeKey,
@@ -377,6 +507,15 @@ export function buildMissingNextTaskOperation({
     companyTargetPayload: null,
     generatedAt: now.toISOString()
   };
+}
+
+function buildMissingNextTaskDedupeKey(record = {}) {
+  return buildNextTaskDedupeKey({
+    personId: record.personId,
+    cadenceName: record.cadenceName,
+    nextCadenceStage: record.cadenceStage,
+    taskType: record.recommendedTaskType
+  });
 }
 
 export function buildMissingNextTaskPayload({ record = {}, dedupeKey, now = new Date() } = {}) {
@@ -501,6 +640,14 @@ async function findOpenTaskForPerson({ client, personId }) {
     listAllRecords(client, 'taskTargets')
   ]);
 
+  return findOpenTaskForPersonFromRecords({
+    tasks,
+    taskTargets,
+    personId
+  });
+}
+
+function findOpenTaskForPersonFromRecords({ tasks = [], taskTargets = [], personId }) {
   return tasks.find((task) => {
     if (!isOpenTask(task)) {
       return false;
@@ -629,6 +776,12 @@ function summarizeMissingNextTaskOperationResults(summary) {
     failed: summary.failed ?? 0,
     verificationFailed: summary.verificationFailed ?? 0,
     skipped: summary.skipped ?? 0,
+    eligibleCount: summary.eligibleCount ?? null,
+    selectedCount: summary.selectedCount ?? null,
+    remainingEligibleCount: summary.remainingEligibleCount ?? null,
+    currentEligibleCount: summary.currentEligibleCount ?? null,
+    skippedExistingCount: summary.skippedExistingCount ?? null,
+    currentEligibilityChecked: Boolean(summary.currentEligibilityChecked),
     taskIdsCreated: summary.taskIdsCreated ?? [],
     personIdsAffected: summary.personIdsAffected ?? [],
     auditIds: summary.auditIds ?? [],
@@ -636,7 +789,7 @@ function summarizeMissingNextTaskOperationResults(summary) {
   };
 }
 
-function summarizeMissingNextTaskLiveResults(results = []) {
+function summarizeMissingNextTaskLiveResults(results = [], selection = {}) {
   return summarizeMissingNextTaskOperationResults({
     planned: 0,
     attempted: results.filter((result) =>
@@ -655,7 +808,13 @@ function summarizeMissingNextTaskLiveResults(results = []) {
       .map((result) => result.personId)
       .filter(Boolean),
     auditIds: results.map((result) => result.audit?.id).filter(Boolean),
-    outboundEventIds: results.map((result) => result.outboundEvent?.id).filter(Boolean)
+    outboundEventIds: results.map((result) => result.outboundEvent?.id).filter(Boolean),
+    eligibleCount: selection.eligibleCount,
+    selectedCount: selection.selectedCount,
+    remainingEligibleCount: selection.remainingEligibleCount,
+    currentEligibleCount: selection.currentEligibleCount,
+    skippedExistingCount: selection.skippedExistingCount,
+    currentEligibilityChecked: selection.currentEligibilityChecked
   });
 }
 
@@ -698,12 +857,33 @@ function buildGuardState(options) {
     includeReview: options.includeReview,
     includeTestRecords: options.includeTestRecords,
     force: options.force,
+    applyMode: options.applyMode,
     linkCompany: options.linkCompany,
     allowPastDue: options.allowPastDue,
     batchSize: options.batchSize,
     batchSizeProvided: options.batchSizeProvided,
     offset: options.offset
   };
+}
+
+function buildRecommendedNextCommand({ summary = {}, options = {} } = {}) {
+  const failed = (summary.failed ?? 0) + (summary.verificationFailed ?? 0);
+
+  if (failed > 0) {
+    return null;
+  }
+
+  if (options.applyMode === 'next_eligible') {
+    if (summary.remainingEligibleCount === 0) {
+      return null;
+    }
+
+    return `MISSING_NEXT_TASK_APPLY_ENABLED=true LIVE_TEST=true MISSING_NEXT_TASK_APPLY_MODE=next_eligible MISSING_NEXT_TASK_BATCH_SIZE=${options.batchSize ?? 10} npm run queues:apply-missing-next-tasks`;
+  }
+
+  const nextOffset = (options.offset ?? 0) + (options.batchSize ?? 0);
+
+  return `MISSING_NEXT_TASK_APPLY_ENABLED=true LIVE_TEST=true MISSING_NEXT_TASK_BATCH_SIZE=${options.batchSize ?? 10} MISSING_NEXT_TASK_OFFSET=${nextOffset} npm run queues:apply-missing-next-tasks`;
 }
 
 function isExcludedRecordState(record = {}) {
@@ -757,6 +937,11 @@ function normalizePositiveInt(value, fallback) {
 function normalizeNonNegativeInt(value, fallback) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? Math.trunc(parsed) : fallback;
+}
+
+function normalizeApplyMode(value) {
+  const normalized = String(value ?? 'offset').trim().toLowerCase();
+  return APPLY_MODES.has(normalized) ? normalized : 'offset';
 }
 
 function normalizeSelect(value) {

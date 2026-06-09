@@ -231,6 +231,10 @@ Missing next-task planning:
   path. It is dry-run by default and requires
   `MISSING_NEXT_TASK_APPLY_ENABLED=true`, `LIVE_TEST=true`, and
   `MISSING_NEXT_TASK_BATCH_SIZE=<n>` before any Task creation.
+- Recommended live batching also sets
+  `MISSING_NEXT_TASK_APPLY_MODE=next_eligible` so each batch takes the first
+  currently eligible safe rows instead of relying on offsets that shift after
+  successful writes. Offset mode remains available for diagnostics.
 - The apply path creates only missing Tasks for safe plan rows, rechecks for
   existing open Tasks, re-adjusts past due dates unless
   `MISSING_NEXT_TASK_ALLOW_PAST_DUE=true`, creates a Person `taskTarget`,

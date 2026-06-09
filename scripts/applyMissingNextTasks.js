@@ -17,6 +17,7 @@ async function main() {
     options: {
       applyEnabled: process.env.MISSING_NEXT_TASK_APPLY_ENABLED,
       liveTest: process.env.LIVE_TEST,
+      applyMode: process.env.MISSING_NEXT_TASK_APPLY_MODE,
       batchSize: process.env.MISSING_NEXT_TASK_BATCH_SIZE,
       offset: process.env.MISSING_NEXT_TASK_OFFSET,
       includeReview: process.env.MISSING_NEXT_TASK_INCLUDE_REVIEW,
@@ -32,6 +33,14 @@ async function main() {
     liveEnabled: result.liveEnabled,
     guard: result.guard,
     summary: result.summary,
+    recommendedNextCommand: result.recommendedNextCommand,
+    nextRecommendedCommand: result.nextRecommendedCommand,
+    eligibleCount: result.eligibleCount,
+    selectedCount: result.selectedCount,
+    remainingEligibleCount: result.remainingEligibleCount,
+    currentEligibleCount: result.currentEligibleCount,
+    skippedExistingCount: result.skippedExistingCount,
+    currentEligibilityChecked: result.currentEligibilityChecked,
     warnings: result.warnings,
     operations: result.operations.map((operation) => ({
       personId: operation.personId,

@@ -953,6 +953,11 @@ Missing next-task operations:
 - `npm run queues:apply-missing-next-tasks` reads that local plan and remains
   dry-run unless `MISSING_NEXT_TASK_APPLY_ENABLED=true`, `LIVE_TEST=true`, and
   `MISSING_NEXT_TASK_BATCH_SIZE=<n>` are set.
+- Recommended live batching uses `MISSING_NEXT_TASK_APPLY_MODE=next_eligible`,
+  which ignores offset and selects the first currently eligible safe rows after
+  rechecking current Twenty Tasks/taskTargets. `offset` mode remains available
+  for diagnostics. Script output includes `remainingEligibleCount`; when it
+  reaches `0`, no next apply command is recommended.
 - `npm run queues:apply-sent-initial-follow-ups` reads
   `data/sent-initial-follow-up-plan.json` and remains dry-run unless
   `SENT_INITIAL_FOLLOW_UP_APPLY_ENABLED=true`, `LIVE_TEST=true`, and

@@ -9,6 +9,8 @@ import {
   applyMissingNextTaskPlan,
   buildMissingNextTaskOperation,
   buildMissingNextTaskPayload,
+  selectCurrentlyEligibleMissingNextTaskCandidateBatch,
+  selectMissingNextTaskCandidateBatch,
   selectMissingNextTaskCandidates
 } from '../src/workflows/outbound/applyMissingNextTasksWorkflow.js';
 
@@ -75,6 +77,165 @@ describe('missing next-task apply workflow', () => {
     });
 
     expect(selected.map((record) => record.personId)).toEqual(['person-safe-2']);
+  });
+
+  it('selects the first currently eligible records in next_eligible mode and ignores offset', () => {
+    const selection = selectMissingNextTaskCandidateBatch(fakeMissingNextTaskPlan(), {
+      applyMode: 'next_eligible',
+      batchSize: 1,
+      offset: 99
+    });
+
+    expect(selection).toMatchObject({
+      applyMode: 'next_eligible',
+      eligibleCount: 2,
+      selectedCount: 1,
+      remainingEligibleCount: 1
+    });
+    expect(selection.records.map((record) => record.personId)).toEqual(['person-safe-1']);
+  });
+
+  it('reports no remaining eligible records when next_eligible has consumed the eligible set', async () => {
+    const result = await applyMissingNextTaskPlan({
+      plan: fakeMissingNextTaskPlan({
+        plans: [safePlanRecord('person-safe-1')]
+      }),
+      config: baseConfig(),
+      restClient: fakeTaskClient(),
+      operationalStore: fakeOperationalStore(),
+      options: {
+        applyEnabled: false,
+        liveTest: false,
+        applyMode: 'next_eligible',
+        batchSize: 5,
+        offset: 50
+      }
+    });
+
+    expect(result).toMatchObject({
+      dryRun: true,
+      eligibleCount: 1,
+      selectedCount: 1,
+      remainingEligibleCount: 0,
+      recommendedNextCommand: null,
+      nextRecommendedCommand: null,
+      summary: {
+        eligibleCount: 1,
+        selectedCount: 1,
+        remainingEligibleCount: 0
+      }
+    });
+    expect(result.operations.map((operation) => operation.personId)).toEqual(['person-safe-1']);
+  });
+
+  it('returns next_eligible continuation guidance while eligible records remain', async () => {
+    const result = await applyMissingNextTaskPlan({
+      plan: fakeMissingNextTaskPlan(),
+      config: baseConfig(),
+      restClient: fakeTaskClient(),
+      operationalStore: fakeOperationalStore(),
+      options: {
+        applyEnabled: false,
+        liveTest: false,
+        applyMode: 'next_eligible',
+        batchSize: 1,
+        offset: 1
+      }
+    });
+
+    expect(result).toMatchObject({
+      dryRun: true,
+      remainingEligibleCount: 1,
+      recommendedNextCommand:
+        'MISSING_NEXT_TASK_APPLY_ENABLED=true LIVE_TEST=true MISSING_NEXT_TASK_APPLY_MODE=next_eligible MISSING_NEXT_TASK_BATCH_SIZE=1 npm run queues:apply-missing-next-tasks',
+      nextRecommendedCommand:
+        'MISSING_NEXT_TASK_APPLY_ENABLED=true LIVE_TEST=true MISSING_NEXT_TASK_APPLY_MODE=next_eligible MISSING_NEXT_TASK_BATCH_SIZE=1 npm run queues:apply-missing-next-tasks'
+    });
+    expect(result.operations.map((operation) => operation.personId)).toEqual(['person-safe-1']);
+  });
+
+  it('checks current Twenty Tasks before selecting a next_eligible live batch', async () => {
+    const restClient = fakeTaskClient({
+      tasks: [
+        {
+          id: 'task-existing-open',
+          title: 'Existing open task',
+          status: 'TODO',
+          bodyV2: {
+            markdown: 'Person ID: person-safe-1'
+          }
+        }
+      ]
+    });
+    const selection = await selectCurrentlyEligibleMissingNextTaskCandidateBatch({
+      client: restClient,
+      plan: fakeMissingNextTaskPlan(),
+      options: {
+        applyMode: 'next_eligible',
+        batchSize: 1,
+        offset: 0
+      }
+    });
+
+    expect(selection).toMatchObject({
+      eligibleCount: 2,
+      currentEligibleCount: 1,
+      skippedExistingCount: 1,
+      selectedCount: 1,
+      remainingEligibleCount: 0,
+      currentEligibilityChecked: true
+    });
+    expect(selection.records.map((record) => record.personId)).toEqual(['person-safe-2']);
+  });
+
+  it('live next_eligible skips already-handled records instead of reprocessing the first plan rows', async () => {
+    const restClient = fakeTaskClient({
+      tasks: [
+        {
+          id: 'task-existing-open',
+          title: 'Existing open task',
+          status: 'TODO',
+          bodyV2: {
+            markdown: 'Person ID: person-safe-1'
+          }
+        }
+      ]
+    });
+    const result = await applyMissingNextTaskPlan({
+      plan: fakeMissingNextTaskPlan(),
+      config: baseConfig(),
+      restClient,
+      operationalStore: fakeOperationalStore(),
+      options: {
+        applyEnabled: true,
+        liveTest: true,
+        applyMode: 'next_eligible',
+        batchSize: 1,
+        offset: 0
+      }
+    });
+
+    expect(result).toMatchObject({
+      status: 'succeeded',
+      currentEligibleCount: 1,
+      skippedExistingCount: 1,
+      remainingEligibleCount: 0,
+      recommendedNextCommand: null,
+      summary: {
+        attempted: 1,
+        succeeded: 1,
+        currentEligibilityChecked: true,
+        currentEligibleCount: 1,
+        skippedExistingCount: 1,
+        remainingEligibleCount: 0
+      }
+    });
+    expect(result.operations.map((operation) => operation.personId)).toEqual(['person-safe-2']);
+    expect(restClient.created.find((entry) => entry.objectPlural === 'tasks')).toMatchObject({
+      payload: {
+        title: 'Send value touch'
+      }
+    });
   });
 
   it('selects safe records only by default', () => {
