@@ -39,6 +39,13 @@ export function buildSentInitialFollowUpApplyOutput({
     },
     retryAfterSeconds: result.retryAfterSeconds,
     recommendedNextCommand: result.recommendedNextCommand,
+    nextRecommendedCommand: result.nextRecommendedCommand,
+    eligibleCount: result.eligibleCount,
+    selectedCount: result.selectedCount,
+    remainingEligibleCount: result.remainingEligibleCount,
+    currentEligibleCount: result.currentEligibleCount,
+    skippedExistingCount: result.skippedExistingCount,
+    currentEligibilityChecked: result.currentEligibilityChecked,
     warnings: result.warnings ?? [],
     operations
   });

@@ -5,6 +5,7 @@ import { createOperationalStore } from '../../persistence/operationalStore.js';
 import { resolveSafeMissingNextTaskDueDate } from '../../utils/projectDate.js';
 
 const REPEATED_FAILURE_LIMIT = 2;
+const APPLY_MODES = new Set(['offset', 'next_eligible']);
 const OPEN_TASK_STATUSES = new Set(['TODO', 'OPEN', 'IN_PROGRESS', 'NOT_STARTED']);
 const EXCLUDED_STATES = new Set([
   'PAUSED',
@@ -62,8 +63,9 @@ export async function applySentInitialFollowUpPlan({
     throw error;
   }
 
-  const selected = selectSentInitialFollowUpCandidates(plan, normalizedOptions);
-  const operations = selected.map((record) =>
+  let selection = selectSentInitialFollowUpCandidateBatch(plan, normalizedOptions);
+  let selected = selection.records;
+  let operations = selected.map((record) =>
     buildSentInitialFollowUpOperation({
       record,
       updatePersonStage: normalizedOptions.updatePersonStage,
@@ -73,28 +75,38 @@ export async function applySentInitialFollowUpPlan({
   );
 
   if (!liveEnabled) {
+    const skippedCount = operations.filter((operation) => operation.status === 'skipped').length;
+    const dryRunSummary = summarizeSentInitialFollowUpOperationResults({
+      planned: operations.filter((operation) => operation.status === 'planned').length,
+      attempted: 0,
+      succeeded: 0,
+      failed: 0,
+      verificationFailed: 0,
+      skipped: skippedCount,
+      eligibleCount: selection.eligibleCount,
+      selectedCount: selection.selectedCount,
+      remainingEligibleCount: selection.remainingEligibleCount
+    });
+    const recommendedNextCommand = buildRecommendedNextCommand({
+      summary: dryRunSummary,
+      options: normalizedOptions
+    });
+
     return {
       status: 'dry_run',
       dryRun: true,
       liveEnabled: false,
       guard: buildGuardState(normalizedOptions),
-      summary: summarizeSentInitialFollowUpOperationResults({
-        planned: operations.filter((operation) => operation.status === 'planned').length,
-        attempted: 0,
-        succeeded: 0,
-        failed: 0,
-        verificationFailed: 0,
-        skipped: operations.filter((operation) => operation.status === 'skipped').length
-      }),
+      summary: dryRunSummary,
       retryAfterSeconds: null,
-      recommendedNextCommand: buildRecommendedNextCommand({
-        summary: {
-          failed: 0,
-          verificationFailed: 0,
-          skipped: operations.filter((operation) => operation.status === 'skipped').length
-        },
-        options: normalizedOptions
-      }),
+      recommendedNextCommand,
+      nextRecommendedCommand: recommendedNextCommand,
+      eligibleCount: selection.eligibleCount,
+      selectedCount: selection.selectedCount,
+      remainingEligibleCount: selection.remainingEligibleCount,
+      currentEligibleCount: selection.currentEligibleCount,
+      skippedExistingCount: selection.skippedExistingCount,
+      currentEligibilityChecked: selection.currentEligibilityChecked,
       operations,
       warnings: [
         'Sent-initial follow-up apply is in dry-run mode. Set SENT_INITIAL_FOLLOW_UP_APPLY_ENABLED=true, LIVE_TEST=true, and SENT_INITIAL_FOLLOW_UP_BATCH_SIZE to create Tasks.'
@@ -110,6 +122,24 @@ export async function applySentInitialFollowUpPlan({
 
   const client = restClient ?? createTwentyRestClient(config.twenty);
   const store = operationalStore ?? createOperationalStore({ config, log });
+
+  if (normalizedOptions.applyMode === 'next_eligible') {
+    selection = await selectCurrentlyEligibleSentInitialFollowUpCandidateBatch({
+      client,
+      plan,
+      options: normalizedOptions
+    });
+    selected = selection.records;
+    operations = selected.map((record) =>
+      buildSentInitialFollowUpOperation({
+        record,
+        updatePersonStage: normalizedOptions.updatePersonStage,
+        linkCompany: normalizedOptions.linkCompany,
+        now
+      })
+    );
+  }
+
   const results = [];
   let consecutiveFailures = 0;
 
@@ -277,7 +307,11 @@ export async function applySentInitialFollowUpPlan({
     }
   }
 
-  const summary = summarizeSentInitialFollowUpLiveResults(results);
+  const summary = summarizeSentInitialFollowUpLiveResults(results, selection);
+  const recommendedNextCommand = buildRecommendedNextCommand({
+    summary,
+    options: normalizedOptions
+  });
 
   return {
     status: determineSentInitialFollowUpStatus(summary),
@@ -286,10 +320,14 @@ export async function applySentInitialFollowUpPlan({
     guard: buildGuardState(normalizedOptions),
     summary,
     retryAfterSeconds: getMaxRetryAfterSeconds(results),
-    recommendedNextCommand: buildRecommendedNextCommand({
-      summary,
-      options: normalizedOptions
-    }),
+    recommendedNextCommand,
+    nextRecommendedCommand: recommendedNextCommand,
+    eligibleCount: selection.eligibleCount,
+    selectedCount: selection.selectedCount,
+    remainingEligibleCount: selection.remainingEligibleCount,
+    currentEligibleCount: selection.currentEligibleCount,
+    skippedExistingCount: selection.skippedExistingCount,
+    currentEligibilityChecked: selection.currentEligibilityChecked,
     operations: results,
     warnings: config.supabase?.enabled
       ? []
@@ -309,6 +347,7 @@ export function normalizeSentInitialFollowUpApplyOptions(options = {}) {
     includeReview: toBoolean(options.includeReview),
     includeTestRecords: toBoolean(options.includeTestRecords),
     force: toBoolean(options.force),
+    applyMode: normalizeApplyMode(options.applyMode),
     batchSize: normalizePositiveInt(rawBatchSize, 5),
     batchSizeProvided,
     offset: normalizeNonNegativeInt(options.offset, 0),
@@ -320,15 +359,83 @@ export function normalizeSentInitialFollowUpApplyOptions(options = {}) {
 }
 
 export function selectSentInitialFollowUpCandidates(plan = {}, options = {}) {
+  return selectSentInitialFollowUpCandidateBatch(plan, options).records;
+}
+
+export function selectSentInitialFollowUpCandidateBatch(plan = {}, options = {}) {
   const normalizedOptions = normalizeSentInitialFollowUpApplyOptions(options);
   const candidates = (plan.plans ?? []).filter((record) =>
     isEligibleSentInitialFollowUpRecord(record, normalizedOptions)
   );
+  const start = normalizedOptions.applyMode === 'next_eligible' ? 0 : normalizedOptions.offset;
+  const records = candidates.slice(start, start + normalizedOptions.batchSize);
 
-  return candidates.slice(
-    normalizedOptions.offset,
-    normalizedOptions.offset + normalizedOptions.batchSize
+  return {
+    records,
+    eligibleCount: candidates.length,
+    selectedCount: records.length,
+    remainingEligibleCount: Math.max(candidates.length - start - records.length, 0),
+    currentEligibleCount: null,
+    skippedExistingCount: null,
+    currentEligibilityChecked: false,
+    applyMode: normalizedOptions.applyMode,
+    offset: normalizedOptions.offset,
+    batchSize: normalizedOptions.batchSize
+  };
+}
+
+export async function selectCurrentlyEligibleSentInitialFollowUpCandidateBatch({
+  client,
+  plan = {},
+  options = {}
+} = {}) {
+  const normalizedOptions = normalizeSentInitialFollowUpApplyOptions({
+    ...options,
+    applyMode: 'next_eligible'
+  });
+  const candidates = (plan.plans ?? []).filter((record) =>
+    isEligibleSentInitialFollowUpRecord(record, normalizedOptions)
   );
+  const [tasks, taskTargets] = await Promise.all([
+    listAllRecords(client, 'tasks'),
+    listAllRecords(client, 'taskTargets')
+  ]);
+  const currentEligibleRecords = [];
+  let skippedExistingCount = 0;
+
+  for (const record of candidates) {
+    const dedupeKey = buildSentInitialFollowUpDedupeKey(record);
+    const existingTask = tasks.find((task) => taskBodyIncludesDedupeKey(task, dedupeKey));
+    const openFollowUp = existingTask
+      ? null
+      : findOpenPostInitialFollowUpTaskForPersonFromRecords({
+          tasks,
+          taskTargets,
+          personId: record.personId
+        });
+
+    if (existingTask || openFollowUp) {
+      skippedExistingCount += 1;
+      continue;
+    }
+
+    currentEligibleRecords.push(record);
+  }
+
+  const records = currentEligibleRecords.slice(0, normalizedOptions.batchSize);
+
+  return {
+    records,
+    eligibleCount: candidates.length,
+    selectedCount: records.length,
+    remainingEligibleCount: Math.max(currentEligibleRecords.length - records.length, 0),
+    currentEligibleCount: currentEligibleRecords.length,
+    skippedExistingCount,
+    currentEligibilityChecked: true,
+    applyMode: 'next_eligible',
+    offset: normalizedOptions.offset,
+    batchSize: normalizedOptions.batchSize
+  };
 }
 
 export function isEligibleSentInitialFollowUpRecord(record = {}, options = {}) {
@@ -402,12 +509,7 @@ export function buildSentInitialFollowUpOperation({
     dueDateAdjustmentReason:
       dueDate.dueDateAdjustmentReason ?? record.dueDateAdjustmentReason ?? null
   };
-  const dedupeKey = buildNextTaskDedupeKey({
-    personId: adjustedRecord.personId,
-    cadenceName: adjustedRecord.cadenceName,
-    nextCadenceStage: adjustedRecord.recommendedNextCadenceStage,
-    taskType: adjustedRecord.recommendedTaskType
-  });
+  const dedupeKey = buildSentInitialFollowUpDedupeKey(adjustedRecord);
   const taskPayload = buildSentInitialFollowUpTaskPayload({
     record: adjustedRecord,
     dedupeKey,
@@ -454,6 +556,15 @@ export function buildSentInitialFollowUpOperation({
     taskPayload,
     generatedAt: now.toISOString()
   };
+}
+
+function buildSentInitialFollowUpDedupeKey(record = {}) {
+  return buildNextTaskDedupeKey({
+    personId: record.personId,
+    cadenceName: record.cadenceName,
+    nextCadenceStage: record.recommendedNextCadenceStage,
+    taskType: record.recommendedTaskType
+  });
 }
 
 function isRecoverableApplyOperation(operation = {}) {
@@ -737,6 +848,14 @@ async function findOpenPostInitialFollowUpTaskForPerson({ client, personId }) {
     listAllRecords(client, 'taskTargets')
   ]);
 
+  return findOpenPostInitialFollowUpTaskForPersonFromRecords({
+    tasks,
+    taskTargets,
+    personId
+  });
+}
+
+function findOpenPostInitialFollowUpTaskForPersonFromRecords({ tasks = [], taskTargets = [], personId }) {
   return tasks.find((task) => {
     if (!isOpenTask(task) || !isPostInitialFollowUpTask(task)) {
       return false;
@@ -868,6 +987,12 @@ function summarizeSentInitialFollowUpOperationResults(summary) {
     failed: summary.failed ?? 0,
     verificationFailed: summary.verificationFailed ?? 0,
     skipped: summary.skipped ?? 0,
+    eligibleCount: summary.eligibleCount ?? null,
+    selectedCount: summary.selectedCount ?? null,
+    remainingEligibleCount: summary.remainingEligibleCount ?? null,
+    currentEligibleCount: summary.currentEligibleCount ?? null,
+    skippedExistingCount: summary.skippedExistingCount ?? null,
+    currentEligibilityChecked: Boolean(summary.currentEligibilityChecked),
     taskIdsCreated: summary.taskIdsCreated ?? [],
     personIdsAffected: summary.personIdsAffected ?? [],
     auditIds: summary.auditIds ?? [],
@@ -875,7 +1000,7 @@ function summarizeSentInitialFollowUpOperationResults(summary) {
   };
 }
 
-function summarizeSentInitialFollowUpLiveResults(results = []) {
+function summarizeSentInitialFollowUpLiveResults(results = [], selection = {}) {
   return summarizeSentInitialFollowUpOperationResults({
     planned: 0,
     attempted: results.filter((result) =>
@@ -894,7 +1019,13 @@ function summarizeSentInitialFollowUpLiveResults(results = []) {
       .map((result) => result.personId)
       .filter(Boolean),
     auditIds: results.map((result) => result.audit?.id).filter(Boolean),
-    outboundEventIds: results.map((result) => result.outboundEvent?.id).filter(Boolean)
+    outboundEventIds: results.map((result) => result.outboundEvent?.id).filter(Boolean),
+    eligibleCount: selection.eligibleCount,
+    selectedCount: selection.selectedCount,
+    remainingEligibleCount: selection.remainingEligibleCount,
+    currentEligibleCount: selection.currentEligibleCount,
+    skippedExistingCount: selection.skippedExistingCount,
+    currentEligibilityChecked: selection.currentEligibilityChecked
   });
 }
 
@@ -940,6 +1071,7 @@ function buildGuardState(options) {
     includeReview: options.includeReview,
     includeTestRecords: options.includeTestRecords,
     force: options.force,
+    applyMode: options.applyMode,
     writeDelayMs: options.writeDelayMs,
     retryAfter429: options.retryAfter429,
     maxRetryAttempts: options.maxRetryAttempts,
@@ -970,6 +1102,14 @@ function buildRecommendedNextCommand({ summary = {}, options = {} } = {}) {
 
   if (failed > 0) {
     return 'SENT_INITIAL_FOLLOW_UP_APPLY_ENABLED=true LIVE_TEST=true npm run queues:recover-sent-initial-follow-ups';
+  }
+
+  if (options.applyMode === 'next_eligible') {
+    if (summary.remainingEligibleCount === 0) {
+      return null;
+    }
+
+    return `SENT_INITIAL_FOLLOW_UP_APPLY_ENABLED=true LIVE_TEST=true SENT_INITIAL_FOLLOW_UP_APPLY_MODE=next_eligible SENT_INITIAL_FOLLOW_UP_BATCH_SIZE=${options.batchSize ?? 10} npm run queues:apply-sent-initial-follow-ups`;
   }
 
   const nextOffset = (options.offset ?? 0) + (options.batchSize ?? 0);
@@ -1103,6 +1243,11 @@ function normalizePositiveInt(value, fallback) {
 function normalizeNonNegativeInt(value, fallback) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? Math.trunc(parsed) : fallback;
+}
+
+function normalizeApplyMode(value) {
+  const normalized = String(value ?? 'offset').trim().toLowerCase();
+  return APPLY_MODES.has(normalized) ? normalized : 'offset';
 }
 
 function normalizeSelect(value) {

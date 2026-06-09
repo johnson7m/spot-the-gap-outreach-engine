@@ -9,6 +9,8 @@ import {
   buildSentInitialFollowUpOperation,
   buildSentInitialFollowUpRecoveryPlan,
   buildSentInitialFollowUpTaskPayload,
+  selectCurrentlyEligibleSentInitialFollowUpCandidateBatch,
+  selectSentInitialFollowUpCandidateBatch,
   selectSentInitialFollowUpCandidates
 } from '../src/workflows/outbound/applySentInitialFollowUpsWorkflow.js';
 import {
@@ -82,6 +84,166 @@ describe('sent initial follow-up apply workflow', () => {
     });
 
     expect(selected.map((record) => record.personId)).toEqual(['person-safe-2']);
+  });
+
+  it('selects the first currently eligible records in next_eligible mode and ignores offset', () => {
+    const selection = selectSentInitialFollowUpCandidateBatch(fakeSentInitialFollowUpPlan(), {
+      applyMode: 'next_eligible',
+      batchSize: 1,
+      offset: 99
+    });
+
+    expect(selection).toMatchObject({
+      applyMode: 'next_eligible',
+      eligibleCount: 2,
+      selectedCount: 1,
+      remainingEligibleCount: 1
+    });
+    expect(selection.records.map((record) => record.personId)).toEqual(['person-safe-1']);
+  });
+
+  it('reports no remaining eligible records when next_eligible has consumed the eligible set', async () => {
+    const result = await applySentInitialFollowUpPlan({
+      plan: fakeSentInitialFollowUpPlan({
+        plans: [safePlanRecord('person-safe-1')]
+      }),
+      config: baseConfig(),
+      restClient: fakeTaskClient(),
+      operationalStore: fakeOperationalStore(),
+      options: {
+        applyEnabled: false,
+        liveTest: false,
+        applyMode: 'next_eligible',
+        batchSize: 5,
+        offset: 50
+      }
+    });
+
+    expect(result).toMatchObject({
+      dryRun: true,
+      eligibleCount: 1,
+      selectedCount: 1,
+      remainingEligibleCount: 0,
+      recommendedNextCommand: null,
+      nextRecommendedCommand: null,
+      summary: {
+        eligibleCount: 1,
+        selectedCount: 1,
+        remainingEligibleCount: 0
+      }
+    });
+    expect(result.operations.map((operation) => operation.personId)).toEqual(['person-safe-1']);
+  });
+
+  it('returns next_eligible continuation guidance while eligible records remain', async () => {
+    const result = await applySentInitialFollowUpPlan({
+      plan: fakeSentInitialFollowUpPlan(),
+      config: baseConfig(),
+      restClient: fakeTaskClient(),
+      operationalStore: fakeOperationalStore(),
+      options: {
+        applyEnabled: false,
+        liveTest: false,
+        applyMode: 'next_eligible',
+        batchSize: 1,
+        offset: 1
+      }
+    });
+
+    expect(result).toMatchObject({
+      dryRun: true,
+      remainingEligibleCount: 1,
+      recommendedNextCommand:
+        'SENT_INITIAL_FOLLOW_UP_APPLY_ENABLED=true LIVE_TEST=true SENT_INITIAL_FOLLOW_UP_APPLY_MODE=next_eligible SENT_INITIAL_FOLLOW_UP_BATCH_SIZE=1 npm run queues:apply-sent-initial-follow-ups',
+      nextRecommendedCommand:
+        'SENT_INITIAL_FOLLOW_UP_APPLY_ENABLED=true LIVE_TEST=true SENT_INITIAL_FOLLOW_UP_APPLY_MODE=next_eligible SENT_INITIAL_FOLLOW_UP_BATCH_SIZE=1 npm run queues:apply-sent-initial-follow-ups'
+    });
+    expect(result.operations.map((operation) => operation.personId)).toEqual(['person-safe-1']);
+  });
+
+  it('checks current Twenty Tasks before selecting a next_eligible live batch', async () => {
+    const restClient = fakeTaskClient({
+      tasks: [
+        {
+          id: 'task-existing-follow-up',
+          title: 'Send relationship follow-up / intro message',
+          status: 'TODO',
+          bodyV2: {
+            markdown: ['Person ID: person-safe-1', 'Next cadence stage: INTRO_MESSAGE'].join('\n')
+          }
+        }
+      ]
+    });
+    const selection = await selectCurrentlyEligibleSentInitialFollowUpCandidateBatch({
+      client: restClient,
+      plan: fakeSentInitialFollowUpPlan(),
+      options: {
+        applyMode: 'next_eligible',
+        batchSize: 1,
+        offset: 0
+      }
+    });
+
+    expect(selection).toMatchObject({
+      eligibleCount: 2,
+      currentEligibleCount: 1,
+      skippedExistingCount: 1,
+      selectedCount: 1,
+      remainingEligibleCount: 0,
+      currentEligibilityChecked: true
+    });
+    expect(selection.records.map((record) => record.personId)).toEqual(['person-safe-2']);
+  });
+
+  it('live next_eligible skips already-handled records instead of reprocessing the first plan rows', async () => {
+    const restClient = fakeTaskClient({
+      tasks: [
+        {
+          id: 'task-existing-follow-up',
+          title: 'Send relationship follow-up / intro message',
+          status: 'TODO',
+          bodyV2: {
+            markdown: ['Person ID: person-safe-1', 'Next cadence stage: INTRO_MESSAGE'].join('\n')
+          }
+        }
+      ]
+    });
+    const result = await applySentInitialFollowUpPlan({
+      plan: fakeSentInitialFollowUpPlan(),
+      config: baseConfig(),
+      restClient,
+      operationalStore: fakeOperationalStore(),
+      options: {
+        applyEnabled: true,
+        liveTest: true,
+        applyMode: 'next_eligible',
+        batchSize: 1,
+        offset: 0,
+        writeDelayMs: 0
+      }
+    });
+
+    expect(result).toMatchObject({
+      status: 'succeeded',
+      currentEligibleCount: 1,
+      skippedExistingCount: 1,
+      remainingEligibleCount: 0,
+      recommendedNextCommand: null,
+      summary: {
+        attempted: 1,
+        succeeded: 1,
+        currentEligibilityChecked: true,
+        currentEligibleCount: 1,
+        skippedExistingCount: 1,
+        remainingEligibleCount: 0
+      }
+    });
+    expect(result.operations.map((operation) => operation.personId)).toEqual(['person-safe-2']);
+    expect(restClient.created.find((entry) => entry.objectPlural === 'tasks')).toMatchObject({
+      payload: {
+        title: 'Send assessment positioning follow-up'
+      }
+    });
   });
 
   it('selects only safe records by default', () => {

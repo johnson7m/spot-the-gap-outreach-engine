@@ -957,6 +957,12 @@ Missing next-task operations:
   `data/sent-initial-follow-up-plan.json` and remains dry-run unless
   `SENT_INITIAL_FOLLOW_UP_APPLY_ENABLED=true`, `LIVE_TEST=true`, and
   `SENT_INITIAL_FOLLOW_UP_BATCH_SIZE=<n>` are set.
+- Recommended live batching uses
+  `SENT_INITIAL_FOLLOW_UP_APPLY_MODE=next_eligible`, which ignores offset and
+  selects the first currently eligible safe rows after rechecking the plan.
+  `offset` mode remains available for diagnostics. Script output includes
+  `remainingEligibleCount`; when it reaches `0`, no next apply command is
+  recommended.
 - The apply path is script-only for now; no workspace endpoint exists yet.
 - Live apply creates a Twenty Task, links it to the Person through
   `taskTargets`, verifies the link, and records CRM audit plus outbound event

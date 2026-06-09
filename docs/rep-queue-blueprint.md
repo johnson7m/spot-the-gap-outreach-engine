@@ -247,6 +247,10 @@ Missing next-task planning:
   path. It is dry-run by default and requires
   `SENT_INITIAL_FOLLOW_UP_APPLY_ENABLED=true`, `LIVE_TEST=true`, and
   `SENT_INITIAL_FOLLOW_UP_BATCH_SIZE=<n>` before any Task creation.
+- Recommended live batching also sets
+  `SENT_INITIAL_FOLLOW_UP_APPLY_MODE=next_eligible` so each batch takes the
+  first currently eligible safe rows instead of relying on offsets that shift
+  after successful writes. Offset mode remains available for diagnostics.
 - Sent-initial apply creates only the next follow-up Task, creates a Person
   `taskTarget`, verifies the link, and writes audit/event rows. It does not
   modify old initial Tasks or update Person cadence stage unless

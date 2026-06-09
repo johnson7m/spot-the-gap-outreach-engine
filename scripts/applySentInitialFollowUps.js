@@ -22,6 +22,7 @@ async function main() {
     options: {
       applyEnabled: process.env.SENT_INITIAL_FOLLOW_UP_APPLY_ENABLED,
       liveTest: process.env.LIVE_TEST,
+      applyMode: process.env.SENT_INITIAL_FOLLOW_UP_APPLY_MODE,
       batchSize: process.env.SENT_INITIAL_FOLLOW_UP_BATCH_SIZE,
       offset: process.env.SENT_INITIAL_FOLLOW_UP_OFFSET,
       updatePersonStage: process.env.SENT_INITIAL_FOLLOW_UP_UPDATE_PERSON_STAGE,

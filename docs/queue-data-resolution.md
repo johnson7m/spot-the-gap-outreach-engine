@@ -467,8 +467,8 @@ This command is implemented but remains dry-run unless every live guard is set:
 ```bash
 SENT_INITIAL_FOLLOW_UP_APPLY_ENABLED=true \
 LIVE_TEST=true \
+SENT_INITIAL_FOLLOW_UP_APPLY_MODE=next_eligible \
 SENT_INITIAL_FOLLOW_UP_BATCH_SIZE=10 \
-SENT_INITIAL_FOLLOW_UP_OFFSET=0 \
 npm run queues:apply-sent-initial-follow-ups
 ```
 
@@ -476,6 +476,13 @@ Live sent-initial apply rules:
 
 - Reads `SENT_INITIAL_FOLLOW_UP_PLAN_PATH`, default
   `data/sent-initial-follow-up-plan.json`.
+- `SENT_INITIAL_FOLLOW_UP_APPLY_MODE=next_eligible` ignores offset and selects
+  the first currently eligible safe rows each time. This is the recommended
+  live mode because the eligible set shrinks after successful batches.
+- `SENT_INITIAL_FOLLOW_UP_APPLY_MODE=offset` remains available for diagnostic
+  slicing and backward compatibility.
+- Output includes `remainingEligibleCount` and `nextRecommendedCommand`; when
+  `remainingEligibleCount=0`, the apply path stops cleanly with no next command.
 - Uses only `safeToCreate=true` rows by default.
 - Skips test/synthetic records unless
   `SENT_INITIAL_FOLLOW_UP_INCLUDE_TEST_RECORDS=true`.

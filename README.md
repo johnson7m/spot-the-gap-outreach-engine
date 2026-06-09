@@ -345,7 +345,7 @@ npm run queues:apply-sent-initial-follow-ups
 Live sent-initial follow-up creation requires an explicit batch:
 
 ```bash
-SENT_INITIAL_FOLLOW_UP_APPLY_ENABLED=true LIVE_TEST=true SENT_INITIAL_FOLLOW_UP_BATCH_SIZE=10 SENT_INITIAL_FOLLOW_UP_OFFSET=0 npm run queues:apply-sent-initial-follow-ups
+SENT_INITIAL_FOLLOW_UP_APPLY_ENABLED=true LIVE_TEST=true SENT_INITIAL_FOLLOW_UP_APPLY_MODE=next_eligible SENT_INITIAL_FOLLOW_UP_BATCH_SIZE=10 npm run queues:apply-sent-initial-follow-ups
 ```
 
 Recover retryable failures from the latest apply output:
@@ -357,6 +357,12 @@ npm run queues:recover-sent-initial-follow-ups
 Sent-initial apply rules:
 
 - reads local `data/sent-initial-follow-up-plan.json` by default
+- supports `SENT_INITIAL_FOLLOW_UP_APPLY_MODE=next_eligible`, which ignores
+  offset and selects the first currently eligible safe records for each batch
+- keeps `SENT_INITIAL_FOLLOW_UP_APPLY_MODE=offset` for diagnostics/backward
+  compatibility
+- returns `remainingEligibleCount` and a `nextRecommendedCommand`; when no
+  eligible rows remain, the next command is `null`
 - creates Tasks only for `safeToCreate=true` rows
 - skips test records unless `SENT_INITIAL_FOLLOW_UP_INCLUDE_TEST_RECORDS=true`
 - skips review records unless explicitly forced

@@ -1,59 +1,49 @@
 # Sent Initial Follow-Up Dry-Run Summary
 
-Generated at: 2026-06-08T23:35:37.242Z
+Generated at: 2026-06-09T00:57:14.326Z
 
 ## Status
 
 - Mode: dry_run
 - Dry run: yes
 - Include test records: no
-- Sent initial follow-up candidates: 56
-- Safe task creation candidates: 45
+- Sent initial follow-up candidates: 46
+- Safe task creation candidates: 35
 - Requires review: 11
 - Test records hidden: 11
 - Test records included: 0
-- Due dates adjusted: 56
+- Due dates adjusted: 46
 
 ## By Cadence
 
 | Value | Count |
 | --- | ---: |
-| RELATIONSHIP_BUILDING_V1 | 56 |
+| RELATIONSHIP_BUILDING_V1 | 46 |
 
 ## By Current Cadence Stage
 
 | Value | Count |
 | --- | ---: |
-| CONNECTION_REQUEST | 20 |
-| NOT_STARTED | 36 |
+| CONNECTION_REQUEST | 18 |
+| NOT_STARTED | 28 |
 
 ## By Recommended Next Stage
 
 | Value | Count |
 | --- | ---: |
-| INTRO_MESSAGE | 56 |
+| INTRO_MESSAGE | 46 |
 
 ## By Confidence
 
 | Value | Count |
 | --- | ---: |
-| high | 45 |
+| high | 35 |
 | medium | 11 |
 
 ## Safe Candidates
 
 | Person | Cadence | Current Stage | Next Stage | Task | Due | Owner |
 | --- | --- | --- | --- | --- | --- | --- |
-| David Armendariz | RELATIONSHIP_BUILDING_V1 | CONNECTION_REQUEST | INTRO_MESSAGE | Send relationship follow-up / intro message | 2026-06-09 | brayson.grider@visiblegap.com |
-| Mark Krusinkski | RELATIONSHIP_BUILDING_V1 | CONNECTION_REQUEST | INTRO_MESSAGE | Send relationship follow-up / intro message | 2026-06-09 | brayson.grider@visiblegap.com |
-| Nick Szymanski | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | INTRO_MESSAGE | Send relationship follow-up / intro message | 2026-06-09 | chandler@visiblegap.com |
-| Erica Bennett | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | INTRO_MESSAGE | Send relationship follow-up / intro message | 2026-06-09 | chandler@visiblegap.com |
-| Tim Clark | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | INTRO_MESSAGE | Send relationship follow-up / intro message | 2026-06-09 | chandler@visiblegap.com |
-| Jeremiah Hanner | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | INTRO_MESSAGE | Send relationship follow-up / intro message | 2026-06-09 | darrean.beller@visiblegap.com |
-| Marty Moran | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | INTRO_MESSAGE | Send relationship follow-up / intro message | 2026-06-09 | chandler@visiblegap.com |
-| Alex Besalch | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | INTRO_MESSAGE | Send relationship follow-up / intro message | 2026-06-09 | chandler@visiblegap.com |
-| Anna Murhling | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | INTRO_MESSAGE | Send relationship follow-up / intro message | 2026-06-09 | chandler@visiblegap.com |
-| Dennis Moorefield | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | INTRO_MESSAGE | Send relationship follow-up / intro message | 2026-06-09 | chandler@visiblegap.com |
 | Lauren Prazeau | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | INTRO_MESSAGE | Send relationship follow-up / intro message | 2026-06-09 | chandler@visiblegap.com |
 | Core Kusch | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | INTRO_MESSAGE | Send relationship follow-up / intro message | 2026-06-09 | chandler@visiblegap.com |
 | Bryan Peskin | RELATIONSHIP_BUILDING_V1 | CONNECTION_REQUEST | INTRO_MESSAGE | Send relationship follow-up / intro message | 2026-06-09 | brayson.grider@visiblegap.com |
