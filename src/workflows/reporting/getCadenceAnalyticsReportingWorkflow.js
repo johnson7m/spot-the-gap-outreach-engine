@@ -14,6 +14,9 @@ export async function getCadenceAnalyticsReportingWorkflow({
   dataSource,
   activitySource,
   supabaseClient,
+  correlationId,
+  endpoint = '/api/reporting/cadence-analytics',
+  requestSource,
   now = new Date()
 } = {}) {
   const { records, source, readStatus, warnings, isCriticalDegraded } =
@@ -22,7 +25,13 @@ export async function getCadenceAnalyticsReportingWorkflow({
       config,
       log,
       workspaceUser,
-      dataSource
+      dataSource,
+      observabilityContext: {
+        endpoint,
+        workflow: 'reporting:cadence-analytics',
+        requestSource,
+        correlationId
+      }
     });
   const activity = await loadReportingActivityRecords({
     query,

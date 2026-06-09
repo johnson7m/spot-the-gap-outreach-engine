@@ -126,6 +126,7 @@ GET /api/reporting/queue-health
 GET /api/reporting/rep-performance
 GET /api/reporting/operations
 GET /api/reporting/cadence-analytics
+GET /api/reporting/read-observability
 ```
 
 Preview is dry-run only and is intended for the internal
@@ -620,6 +621,7 @@ GET /api/reporting/queue-health
 GET /api/reporting/rep-performance
 GET /api/reporting/operations
 GET /api/reporting/cadence-analytics
+GET /api/reporting/read-observability
 ```
 
 These endpoints require Supabase workspace JWT auth and role `admin`,
@@ -635,6 +637,9 @@ Phase 4 adds read-only cadence analytics from Twenty cadence/task state plus
 Supabase `outbound_events` and `assessment_submissions`. Conversion rows include
 `high`, `medium`, or `low` confidence so approximate current-state conversions
 are not mistaken for fully historical funnel rates.
+Read Observability is admin/operator-only and reports process-local Twenty read
+instrumentation for endpoint/workflow duration, cache status, fetched records,
+fetched pages, duplicate-read estimates, and snapshot-layer opportunities.
 
 Diagnostic scripts:
 
@@ -644,6 +649,7 @@ npm run reporting:queue-health
 npm run reporting:rep-performance
 npm run reporting:operations
 npm run reporting:cadence-analytics
+npm run reporting:read-observability
 ```
 
 Set `REPORTING_OWNER_SCOPE=mine|all`, `REPORTING_ASSIGNEE_SCOPE=mine|all`,
@@ -725,6 +731,7 @@ Useful docs:
 - `docs/reporting-blueprint-v2.md`
 - `docs/queue-data-resolution.md`
 - `docs/legacy-lead-retrofit-plan.md`
+- `docs/workspace-performance-stabilization-plan.md`
 
 ## Roadmap
 

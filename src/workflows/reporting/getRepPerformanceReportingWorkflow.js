@@ -14,6 +14,9 @@ export async function getRepPerformanceReportingWorkflow({
   dataSource,
   activitySource,
   supabaseClient,
+  correlationId,
+  endpoint = '/api/reporting/rep-performance',
+  requestSource,
   now = new Date()
 } = {}) {
   const { records, source, readStatus, warnings, isCriticalDegraded } =
@@ -22,7 +25,13 @@ export async function getRepPerformanceReportingWorkflow({
       config,
       log,
       workspaceUser,
-      dataSource
+      dataSource,
+      observabilityContext: {
+        endpoint,
+        workflow: 'reporting:rep-performance',
+        requestSource,
+        correlationId
+      }
     });
   const activity = await loadReportingActivityRecords({
     query,

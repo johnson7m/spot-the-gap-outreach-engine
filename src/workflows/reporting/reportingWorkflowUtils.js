@@ -7,7 +7,8 @@ export async function loadReportingSourceRecords({
   config = {},
   log,
   workspaceUser,
-  dataSource
+  dataSource,
+  observabilityContext = {}
 } = {}) {
   const normalizedQuery = normalizeQueueQuery(query, workspaceUser);
   const source =
@@ -22,12 +23,20 @@ export async function loadReportingSourceRecords({
       ? await source.listAllQueueRecords({
           pageSize: 100,
           maxPages: config.queue?.maxPages ?? config.legacyRetrofit?.maxPages ?? 10,
-          query: normalizedQuery
+          query: normalizedQuery,
+          observabilityContext: buildReportingObservabilityContext({
+            observabilityContext,
+            workspaceUser
+          })
         })
       : await source.listQueueRecords({
           limit: Math.min(Math.max(normalizedQuery.limit + normalizedQuery.offset, 100), 250),
           offset: 0,
-          query: normalizedQuery
+          query: normalizedQuery,
+          observabilityContext: buildReportingObservabilityContext({
+            observabilityContext,
+            workspaceUser
+          })
         });
   const readStatus = normalizeReportingReadStatus(records.readStatus);
   const warnings = uniqueStrings([
@@ -258,4 +267,20 @@ function buildReportingReadWarnings(readStatus = {}) {
 
 function uniqueStrings(values = []) {
   return Array.from(new Set(values.filter((value) => typeof value === 'string' && value.length > 0)));
+}
+
+function buildReportingObservabilityContext({
+  observabilityContext = {},
+  workspaceUser = {}
+} = {}) {
+  const workflow = observabilityContext.workflow ?? 'reporting:unknown';
+
+  return {
+    endpoint: observabilityContext.endpoint ?? workflow.replace(/^reporting:/, '/api/reporting/'),
+    workflow,
+    requestSource:
+      observabilityContext.requestSource ??
+      (workspaceUser?.roleSource === 'diagnostic_script' ? 'diagnostic_script' : 'workspace_api'),
+    correlationId: observabilityContext.correlationId
+  };
 }

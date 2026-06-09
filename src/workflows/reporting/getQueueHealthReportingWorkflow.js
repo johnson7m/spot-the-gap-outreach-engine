@@ -11,6 +11,9 @@ export async function getQueueHealthReportingWorkflow({
   log,
   workspaceUser,
   dataSource,
+  correlationId,
+  endpoint = '/api/reporting/queue-health',
+  requestSource,
   now = new Date()
 } = {}) {
   const { records, source, readStatus, warnings, isCriticalDegraded } =
@@ -19,7 +22,13 @@ export async function getQueueHealthReportingWorkflow({
       config,
       log,
       workspaceUser,
-      dataSource
+      dataSource,
+      observabilityContext: {
+        endpoint,
+        workflow: 'reporting:queue-health',
+        requestSource,
+        correlationId
+      }
     });
 
   if (isCriticalDegraded) {

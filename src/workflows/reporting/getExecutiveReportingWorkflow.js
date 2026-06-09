@@ -11,6 +11,9 @@ export async function getExecutiveReportingWorkflow({
   log,
   workspaceUser,
   dataSource,
+  correlationId,
+  endpoint = '/api/reporting/executive',
+  requestSource,
   now = new Date()
 } = {}) {
   const { records, source, readStatus, warnings, isCriticalDegraded } =
@@ -19,7 +22,13 @@ export async function getExecutiveReportingWorkflow({
       config,
       log,
       workspaceUser,
-      dataSource
+      dataSource,
+      observabilityContext: {
+        endpoint,
+        workflow: 'reporting:executive',
+        requestSource,
+        correlationId
+      }
     });
 
   if (isCriticalDegraded) {

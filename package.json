@@ -42,6 +42,7 @@
     "reporting:rep-performance": "node scripts/getRepPerformanceReporting.js",
     "reporting:operations": "node scripts/getOperationsReporting.js",
     "reporting:cadence-analytics": "node scripts/getCadenceAnalyticsReporting.js",
+    "reporting:read-observability": "node scripts/getReadObservabilityReporting.js",
     "legacy:tasks:apply": "node scripts/applyLegacyTaskRetrofit.js",
     "legacy:owners:plan": "node scripts/planLegacyOwnerCleanup.js",
     "legacy:owners:apply": "node scripts/applyLegacyOwnerCleanup.js"

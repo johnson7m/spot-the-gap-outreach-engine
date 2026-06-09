@@ -5,8 +5,10 @@ import { getQueueHealthReportingWorkflow } from '../../workflows/reporting/getQu
 import { getOperationsReportingWorkflow } from '../../workflows/reporting/getOperationsReportingWorkflow.js';
 import { getRepPerformanceReportingWorkflow } from '../../workflows/reporting/getRepPerformanceReportingWorkflow.js';
 import { getCadenceAnalyticsReportingWorkflow } from '../../workflows/reporting/getCadenceAnalyticsReportingWorkflow.js';
+import { getReadObservabilityReportingWorkflow } from '../../workflows/reporting/getReadObservabilityReportingWorkflow.js';
 
 const REPORTING_WORKSPACE_ROLES = ['admin', 'operator', 'rep'];
+const READ_OBSERVABILITY_ROLES = ['admin', 'operator'];
 
 export function createReportingApiRouter({
   config = {},
@@ -16,6 +18,7 @@ export function createReportingApiRouter({
   getRepPerformanceReportingWorkflowFn = getRepPerformanceReportingWorkflow,
   getOperationsReportingWorkflowFn = getOperationsReportingWorkflow,
   getCadenceAnalyticsReportingWorkflowFn = getCadenceAnalyticsReportingWorkflow,
+  getReadObservabilityReportingWorkflowFn = getReadObservabilityReportingWorkflow,
   workspaceAuthSupabaseClient,
   dataSource,
   activitySource
@@ -91,6 +94,21 @@ export function createReportingApiRouter({
         log,
         getOperationsReportingWorkflowFn,
         activitySource
+      });
+    }
+  );
+
+  router.get(
+    '/read-observability',
+    requireWorkspaceAuth({
+      config,
+      log,
+      allowedRoles: READ_OBSERVABILITY_ROLES,
+      supabaseClient: workspaceAuthSupabaseClient
+    }),
+    async (req, res, next) => {
+      await handleReadObservabilityReportingFetch(req, res, next, {
+        getReadObservabilityReportingWorkflowFn
       });
     }
   );
@@ -247,6 +265,27 @@ export async function handleCadenceAnalyticsReportingFetch(
       workspaceUser: req.workspaceUser,
       dataSource,
       activitySource,
+      correlationId: req.correlationId
+    });
+
+    res.json(successEnvelope({ correlationId: req.correlationId, data: result, warnings: result.warnings }));
+  } catch (error) {
+    handleReportingError(error, req, res, next);
+  }
+}
+
+export async function handleReadObservabilityReportingFetch(
+  req,
+  res,
+  next,
+  {
+    getReadObservabilityReportingWorkflowFn = getReadObservabilityReportingWorkflow
+  } = {}
+) {
+  try {
+    const result = await getReadObservabilityReportingWorkflowFn({
+      query: req.query ?? {},
+      workspaceUser: req.workspaceUser,
       correlationId: req.correlationId
     });
 

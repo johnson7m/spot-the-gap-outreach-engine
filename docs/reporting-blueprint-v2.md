@@ -18,6 +18,7 @@ Implemented read-only endpoints:
 - `GET /api/reporting/rep-performance`
 - `GET /api/reporting/operations`
 - `GET /api/reporting/cadence-analytics`
+- `GET /api/reporting/read-observability`
 
 Implemented read-only diagnostic scripts:
 
@@ -26,6 +27,7 @@ Implemented read-only diagnostic scripts:
 - `npm run reporting:rep-performance`
 - `npm run reporting:operations`
 - `npm run reporting:cadence-analytics`
+- `npm run reporting:read-observability`
 
 Phase 1/2 reporting reuses the same Twenty source reads, queue read
 cache/degraded handling, test-record hiding, owner scope rules, queue
@@ -38,6 +40,11 @@ Cadence Analytics reads Twenty current cadence/task state plus Supabase
 `outbound_events` and `assessment_submissions` when configured. Conversion
 metrics intentionally include confidence flags because current event taxonomy
 does not always store complete old/new stage transitions.
+Read Observability is process-local instrumentation for measuring current
+Twenty source read behavior before a shared snapshot layer is implemented. It
+reports endpoint/workflow duration, cache hit/miss status, object/page counts,
+estimated duplicate reads, and snapshot-layer opportunities. It is read-only and
+admin/operator-only.
 
 ## Reporting Principles
 

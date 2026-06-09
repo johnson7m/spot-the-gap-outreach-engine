@@ -106,6 +106,7 @@ Implemented endpoints:
 - `GET /api/reporting/rep-performance`
 - `GET /api/reporting/operations`
 - `GET /api/reporting/cadence-analytics`
+- `GET /api/reporting/read-observability`
 
 Planned endpoints:
 
@@ -140,6 +141,8 @@ Approved `leadSource` values:
 | Duplicate merge | `admin`, `rep`, `operator` |
 | Queue reads | `admin`, `rep`, `operator` |
 | Task complete/pause/resume | `admin`, `rep`, `operator` |
+| Reporting reads | `admin`, `rep`, `operator` |
+| Read observability reporting | `admin`, `operator` |
 | Recovery reads/retries | `admin`, `operator` |
 
 ## POST /api/quick-capture/preview
@@ -1251,6 +1254,7 @@ GET /api/reporting/queue-health?ownerScope=all&includeDiagnostics=true
 GET /api/reporting/rep-performance?ownerScope=all&startDate=2026-06-01&endDate=2026-06-30
 GET /api/reporting/operations?startDate=2026-06-01&endDate=2026-06-30&includeDiagnostics=true
 GET /api/reporting/cadence-analytics?ownerScope=all&cadenceName=RELATIONSHIP_BUILDING_V1
+GET /api/reporting/read-observability?topLimit=10
 ```
 
 Common response envelope:
@@ -1393,6 +1397,41 @@ event history may not contain complete old/new stage transitions. UI should
 display low-confidence conversions as directional, not definitive funnel rates.
 For non-`high` confidence rows, `conversionRate` is a current-state share of
 `toCount / (fromCount + toCount)`, not a historical transition rate.
+
+`GET /api/reporting/read-observability` returns process-local Twenty read
+instrumentation. It is admin/operator-only and does not write to Twenty,
+Supabase, or assessment workflow state.
+
+Returned fields include:
+
+- `metrics.totalTwentyReads`
+- `metrics.averageDurationMs`
+- `metrics.cacheHitRate`
+- `metrics.cacheMissRate`
+- `metrics.totalRecordsFetched`
+- `metrics.totalPagesFetched`
+- `metrics.estimatedDuplicateReads`
+- `readsByEndpoint`
+- `readsByWorkflow`
+- `readsByRequestSource`
+- `readsByCacheStatus`
+- `topEndpoints[]`
+- `topWorkflows[]`
+- `mostExpensiveReads[]`
+- `mostFrequentReads[]`
+- `duplicateReadEstimate`
+- `snapshotLayerOpportunities[]`
+- `recentReads[]`
+
+Query params:
+
+- `since` or `startDate`: optional ISO date/time lower bound
+- `limit`: max retained events to inspect
+- `topLimit`: max rows for top/expensive/frequent lists
+
+Because this is in-memory process-local instrumentation, deployments with
+multiple instances or restarts may show partial read history. Use it to guide
+snapshot/cache architecture, not as a durable audit source.
 
 When critical Twenty reads are rate-limited or degraded, reporting mirrors the
 queue API degraded contract:

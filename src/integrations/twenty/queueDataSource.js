@@ -1,9 +1,19 @@
 import { createTwentyRestClient } from './restClient.js';
+import { recordTwentyRead } from '../../services/readObservabilityService.js';
 
 const DEFAULT_FETCH_LIMIT = 120;
 const MAX_FETCH_LIMIT = 250;
 const CRITICAL_QUEUE_OBJECTS = new Set(['people', 'tasks', 'taskTargets']);
 const RETRYABLE_READ_STATUSES = new Set([429, 502, 503, 504]);
+const QUEUE_OBJECT_TYPES = [
+  'people',
+  'companies',
+  'tasks',
+  'taskTargets',
+  'noteTargets',
+  'timelineActivities',
+  'workspaceMembers'
+];
 const queueReadCache = new Map();
 
 export function createTwentyQueueDataSource({ config = {}, queueRead = {}, log, restClient } = {}) {
@@ -14,11 +24,17 @@ export function createTwentyQueueDataSource({ config = {}, queueRead = {}, log, 
   return {
     provider: 'twenty',
 
-    async listQueueRecords({ limit = DEFAULT_FETCH_LIMIT, offset = 0, query = {} } = {}) {
+    async listQueueRecords({
+      limit = DEFAULT_FETCH_LIMIT,
+      offset = 0,
+      query = {},
+      observabilityContext = {}
+    } = {}) {
       if (!client) {
         return buildMissingCredentialsRecords({ pageSize: limit, maxPages: 1 });
       }
 
+      const startedAt = Date.now();
       const fetchLimit = Math.min(Math.max(Number(limit) || DEFAULT_FETCH_LIMIT, 1), MAX_FETCH_LIMIT);
       const fetchOffset = Math.max(Number(offset) || 0, 0);
       const criticalObjects = getCriticalQueueObjects(query);
@@ -45,22 +61,43 @@ export function createTwentyQueueDataSource({ config = {}, queueRead = {}, log, 
           }
         });
 
-        return finalizeQueueRead({
+        const records = finalizeQueueRead({
           objectResults,
           criticalObjects,
           cacheKey,
           cacheOptions
         });
+
+        recordQueueSourceRead({
+          startedAt,
+          mode: 'page',
+          records,
+          observabilityContext
+        });
+
+        return records;
       } catch (error) {
+        recordQueueSourceRead({
+          startedAt,
+          mode: 'page',
+          error,
+          observabilityContext
+        });
         throw buildQueueReadError(error, 'Twenty queue data fetch failed', log);
       }
     },
 
-    async listAllQueueRecords({ pageSize = 100, maxPages = 10, query = {} } = {}) {
+    async listAllQueueRecords({
+      pageSize = 100,
+      maxPages = 10,
+      query = {},
+      observabilityContext = {}
+    } = {}) {
       if (!client) {
         return buildMissingCredentialsRecords({ pageSize, maxPages });
       }
 
+      const startedAt = Date.now();
       const fetchPageSize = Math.min(Math.max(Number(pageSize) || 100, 1), MAX_FETCH_LIMIT);
       const fetchMaxPages = Math.max(Number(maxPages) || 10, 1);
       const criticalObjects = getCriticalQueueObjects(query);
@@ -104,14 +141,29 @@ export function createTwentyQueueDataSource({ config = {}, queueRead = {}, log, 
           }
         };
 
-        return finalizeQueueRead({
+        const records = finalizeQueueRead({
           objectResults,
           criticalObjects,
           cacheKey,
           cacheOptions,
           pagination
         });
+
+        recordQueueSourceRead({
+          startedAt,
+          mode: 'all',
+          records,
+          observabilityContext
+        });
+
+        return records;
       } catch (error) {
+        recordQueueSourceRead({
+          startedAt,
+          mode: 'all',
+          error,
+          observabilityContext
+        });
         throw buildQueueReadError(error, 'Twenty full queue data fetch failed', log);
       }
     }
@@ -638,4 +690,65 @@ function buildEmptyPagination({ pageSize, maxPages }) {
     maxPages,
     objects: {}
   };
+}
+
+function recordQueueSourceRead({
+  startedAt,
+  mode,
+  records,
+  error,
+  observabilityContext = {}
+} = {}) {
+  const durationMs = Math.max(Date.now() - startedAt, 0);
+  const recordsFetchedByObject = records ? buildRecordsFetchedByObject(records) : {};
+  const pagesFetchedByObject = records ? buildPagesFetchedByObject(records, mode) : {};
+  const cacheStatus = records?.readStatus?.cache?.status ?? 'unknown';
+
+  recordTwentyRead({
+    endpoint: observabilityContext.endpoint,
+    workflow: observabilityContext.workflow,
+    requestSource: observabilityContext.requestSource,
+    timestamp: new Date(),
+    durationMs,
+    cacheStatus,
+    cacheHit: cacheStatus === 'hit',
+    cacheMiss: cacheStatus === 'miss',
+    readStatus: records?.readStatus?.status ?? (error ? 'failed' : 'unknown'),
+    status: error ? 'failed' : 'completed',
+    recordsFetchedByObject,
+    pagesFetchedByObject,
+    objectTypesRead: QUEUE_OBJECT_TYPES,
+    mode,
+    provider: 'twenty',
+    errorMessage: error?.message
+  });
+}
+
+function buildRecordsFetchedByObject(records = {}) {
+  return Object.fromEntries(
+    QUEUE_OBJECT_TYPES.map((objectType) => [
+      objectType,
+      Array.isArray(records[objectType]) ? records[objectType].length : 0
+    ])
+  );
+}
+
+function buildPagesFetchedByObject(records = {}, mode) {
+  const paginationObjects = records.pagination?.objects;
+
+  if (paginationObjects && typeof paginationObjects === 'object') {
+    return Object.fromEntries(
+      QUEUE_OBJECT_TYPES.map((objectType) => [
+        objectType,
+        Number(paginationObjects[objectType]?.pagesFetched ?? 0)
+      ])
+    );
+  }
+
+  return Object.fromEntries(
+    QUEUE_OBJECT_TYPES.map((objectType) => [
+      objectType,
+      mode === 'page' ? 1 : 0
+    ])
+  );
 }

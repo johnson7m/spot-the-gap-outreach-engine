@@ -12,6 +12,7 @@ export async function getOutboundQueueWorkflow({
   log,
   workspaceUser,
   dataSource,
+  correlationId,
   now = new Date()
 } = {}) {
   const normalizedQuery = normalizeQueueQuery(query, workspaceUser);
@@ -27,12 +28,24 @@ export async function getOutboundQueueWorkflow({
       ? await source.listAllQueueRecords({
           pageSize: 100,
           maxPages: config.queue?.maxPages ?? config.legacyRetrofit?.maxPages ?? 10,
-          query: normalizedQuery
+          query: normalizedQuery,
+          observabilityContext: buildQueueObservabilityContext({
+            endpoint: `/api/queues/${queueSlug}`,
+            workflow: `queue:${queueSlug}`,
+            workspaceUser,
+            correlationId
+          })
         })
       : await source.listQueueRecords({
           limit: Math.min(Math.max(normalizedQuery.limit + normalizedQuery.offset, 100), 250),
           offset: 0,
-          query: normalizedQuery
+          query: normalizedQuery,
+          observabilityContext: buildQueueObservabilityContext({
+            endpoint: `/api/queues/${queueSlug}`,
+            workflow: `queue:${queueSlug}`,
+            workspaceUser,
+            correlationId
+          })
         });
   const queue = buildQueue({
     queueSlug,
@@ -111,6 +124,7 @@ export async function getOutboundQueueSummaryWorkflow({
   log,
   workspaceUser,
   dataSource,
+  correlationId,
   now = new Date()
 } = {}) {
   const normalizedQuery = normalizeQueueQuery(query, workspaceUser);
@@ -126,12 +140,24 @@ export async function getOutboundQueueSummaryWorkflow({
       ? await source.listAllQueueRecords({
           pageSize: 100,
           maxPages: config.queue?.maxPages ?? config.legacyRetrofit?.maxPages ?? 10,
-          query: normalizedQuery
+          query: normalizedQuery,
+          observabilityContext: buildQueueObservabilityContext({
+            endpoint: '/api/queues/summary',
+            workflow: 'queue:summary',
+            workspaceUser,
+            correlationId
+          })
         })
       : await source.listQueueRecords({
           limit: Math.min(Math.max(normalizedQuery.limit + normalizedQuery.offset, 100), 250),
           offset: 0,
-          query: normalizedQuery
+          query: normalizedQuery,
+          observabilityContext: buildQueueObservabilityContext({
+            endpoint: '/api/queues/summary',
+            workflow: 'queue:summary',
+            workspaceUser,
+            correlationId
+          })
         });
   const warningBuckets = splitQueueWarnings({
     recordWarnings: records.warnings ?? [],
@@ -317,4 +343,18 @@ function buildPaginationWarnings(pagination) {
 
 function uniqueStrings(values) {
   return Array.from(new Set(values.filter((value) => typeof value === 'string' && value.length > 0)));
+}
+
+function buildQueueObservabilityContext({
+  endpoint,
+  workflow,
+  workspaceUser = {},
+  correlationId
+} = {}) {
+  return {
+    endpoint,
+    workflow,
+    requestSource: workspaceUser?.roleSource === 'diagnostic_script' ? 'diagnostic_script' : 'workspace_api',
+    correlationId
+  };
 }
