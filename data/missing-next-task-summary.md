@@ -1,104 +1,48 @@
 # Missing Next-Task Dry-Run Summary
 
-Generated at: 2026-06-09T01:37:19.360Z
+Generated at: 2026-06-09T05:20:36.839Z
 
 ## Status
 
 - Mode: dry_run
 - Dry run: yes
 - Include test records: no
-- Missing next-task candidates: 69
-- Safe task creation candidates: 62
+- Missing next-task candidates: 7
+- Safe task creation candidates: 0
 - Requires review: 7
 - Test records hidden: 11
 - Test records included: 0
-- Due dates adjusted: 69
+- Due dates adjusted: 7
 
 ## By Due Date Adjustment Reason
 
 | Value | Count |
 | --- | ---: |
-| past_due_date:2026-06-05<2026-06-08 | 63 |
-| same_day_after_business_cutoff:2026-06-08 | 6 |
+| past_due_date:2026-06-05<2026-06-09 | 7 |
 
 ## By Cadence
 
 | Value | Count |
 | --- | ---: |
-| ASSESSMENT_CAMPAIGN_V1 | 6 |
-| RELATIONSHIP_BUILDING_V1 | 63 |
+| RELATIONSHIP_BUILDING_V1 | 7 |
 
 ## By Cadence Stage
 
 | Value | Count |
 | --- | ---: |
 | CONNECTION_REQUEST | 5 |
-| DISCOVERY_ASK | 1 |
 | INTRO_MESSAGE | 1 |
-| NOT_STARTED | 60 |
-| STRATEGIC_CHECK_IN | 2 |
+| NOT_STARTED | 1 |
 
 ## By Confidence
 
 | Value | Count |
 | --- | ---: |
-| high | 62 |
 | medium | 7 |
 
 ## Safe Candidates
 
-| Person | Cadence | Stage | Task | Due | Owner |
-| --- | --- | --- | --- | --- | --- |
-| Leah | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| Ryan Henry | ASSESSMENT_CAMPAIGN_V1 | NOT_STARTED | Send assessment-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| Garrett-Andrew Warner Sr. | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| Sylvia Redic | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| Mercy Ilias | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| Lisa Bowers | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| Taylor Harter | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| Jeremiah Little | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| Mack Nigh | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| George Bezerra | RELATIONSHIP_BUILDING_V1 | STRATEGIC_CHECK_IN | Send strategic check-in | 2026-06-09 | chandler@visiblegap.com |
-| Jennifier Bodovetz | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | brayson.grider@visiblegap.com |
-| Erik Chapman | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| John Sutton | ASSESSMENT_CAMPAIGN_V1 | NOT_STARTED | Send assessment-oriented connection request | 2026-06-09 | darrean.beller@visiblegap.com |
-| LaShaunna Bentley | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| David Manley | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| Shirisha Chennamaraju | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| Olga Markin | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| Chris Frantz | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| Angel Starks | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| Jane Doe | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | hello@visiblegap.com |
-| Claire H. | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| Alan Cerrie | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| Ashleigh Smith | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| Paul Altiery | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| Jasen Holloway | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| Jamie Olson | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| Kyisha Bond | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| Jordan Jones | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| Joanie Reneer | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| Amy Duranto | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| John Hostetter | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| Tommilynn Smith | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| Daisy Avalos | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| Bill Higgins | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| David Van Deman | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| Jannie Hernandez | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| Harvey Harrington | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| Christopher Campbell | RELATIONSHIP_BUILDING_V1 | STRATEGIC_CHECK_IN | Send strategic check-in | 2026-06-09 | chandler@visiblegap.com |
-| Margaret Broadus | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| Latrese Jefferson | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| Jennifer Darling | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| Erika Teles | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| Jobeth Horgan | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| Darrean Beller | RELATIONSHIP_BUILDING_V1 | DISCOVERY_ASK | Evaluate discovery ask | 2026-06-09 | chandler@visiblegap.com |
-| Jake Morris | ASSESSMENT_CAMPAIGN_V1 | NOT_STARTED | Send assessment-oriented connection request | 2026-06-09 | darrean.beller@visiblegap.com |
-| Elli Jones | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| Chloe Elkins | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| John Ciano | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| Nick Ludlow | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
-| Grace Conyers | RELATIONSHIP_BUILDING_V1 | NOT_STARTED | Send relationship-oriented connection request | 2026-06-09 | chandler@visiblegap.com |
+_None._
 
 ## Future Apply Stub
 
