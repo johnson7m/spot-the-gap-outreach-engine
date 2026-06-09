@@ -105,6 +105,7 @@ Implemented endpoints:
 - `GET /api/reporting/queue-health`
 - `GET /api/reporting/rep-performance`
 - `GET /api/reporting/operations`
+- `GET /api/reporting/cadence-analytics`
 
 Planned endpoints:
 
@@ -1249,6 +1250,7 @@ GET /api/reporting/executive?ownerScope=all&includeDiagnostics=true
 GET /api/reporting/queue-health?ownerScope=all&includeDiagnostics=true
 GET /api/reporting/rep-performance?ownerScope=all&startDate=2026-06-01&endDate=2026-06-30
 GET /api/reporting/operations?startDate=2026-06-01&endDate=2026-06-30&includeDiagnostics=true
+GET /api/reporting/cadence-analytics?ownerScope=all&cadenceName=RELATIONSHIP_BUILDING_V1
 ```
 
 Common response envelope:
@@ -1360,6 +1362,37 @@ It does not read or write Twenty. `recentFailures[]` intentionally returns only
 safe fields such as source, record id, timestamp, correlation id, event type,
 object/action/status, workflow, message, and sanitized error details. API keys,
 tokens, authorization headers, passwords, and secrets are omitted or redacted.
+
+`GET /api/reporting/cadence-analytics` returns:
+
+- `dateRange`
+- `cadenceName`
+- `totals.records`
+- `totals.tasks`
+- `totals.touches`
+- `totals.responses`
+- `totals.noResponses`
+- `totals.assessmentRequests`
+- `totals.assessmentCompletions`
+- `totals.discoveryAsks`
+- `totals.discoveryReady`
+- `byCadence`
+- `byStage`
+- `tasksByCadenceStageTaskType[]`
+- `byChannel`
+- `byTouchStatus`
+- `conversionSummary[]`
+
+Cadence Analytics supports `ownerScope=mine|all`, `assigneeScope=mine|all`,
+`startDate`, `endDate`, `cadenceName`, and `includeDiagnostics`. Current
+records and task grouping come from Twenty. Touch/channel/status metrics come
+from Supabase `outbound_events`. Assessment completion counts come from
+`assessment_submissions` when configured. Conversion rows include
+`confidence="high"|"medium"|"low"` and `approximate=true|false` because current
+event history may not contain complete old/new stage transitions. UI should
+display low-confidence conversions as directional, not definitive funnel rates.
+For non-`high` confidence rows, `conversionRate` is a current-state share of
+`toCount / (fromCount + toCount)`, not a historical transition rate.
 
 When critical Twenty reads are rate-limited or degraded, reporting mirrors the
 queue API degraded contract:

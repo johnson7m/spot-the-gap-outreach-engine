@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { requireWorkspaceAuth } from '../src/middleware/supabaseWorkspaceAuth.js';
 import {
   handleExecutiveReportingFetch,
+  handleCadenceAnalyticsReportingFetch,
   handleOperationsReportingFetch,
   handleQueueHealthReportingFetch,
   handleRepPerformanceReportingFetch
@@ -11,6 +12,7 @@ import { getExecutiveReportingWorkflow } from '../src/workflows/reporting/getExe
 import { getQueueHealthReportingWorkflow } from '../src/workflows/reporting/getQueueHealthReportingWorkflow.js';
 import { getOperationsReportingWorkflow } from '../src/workflows/reporting/getOperationsReportingWorkflow.js';
 import { getRepPerformanceReportingWorkflow } from '../src/workflows/reporting/getRepPerformanceReportingWorkflow.js';
+import { getCadenceAnalyticsReportingWorkflow } from '../src/workflows/reporting/getCadenceAnalyticsReportingWorkflow.js';
 import sampleAssessment from '../data/sample-netlify-assessment-submission.json' with { type: 'json' };
 
 const baseConfig = {
@@ -507,6 +509,172 @@ describe('reporting workflows', () => {
     });
   });
 
+  it('returns cadence analytics with current-state counts and confidence-labeled conversions', async () => {
+    const result = await getCadenceAnalyticsReportingWorkflow({
+      query: {
+        ownerScope: 'all',
+        assigneeScope: 'all',
+        startDate: '2026-06-01',
+        endDate: '2026-06-09',
+        includeDiagnostics: true
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeReportingDataSource({
+        people: cadenceReportingPeople(),
+        tasks: cadenceReportingTasks(),
+        taskTargets: cadenceReportingTaskTargets()
+      }),
+      activitySource: fakeActivitySource({
+        outboundEvents: cadenceReportingOutboundEvents(),
+        crmSyncLogs: [],
+        assessmentSubmissions: cadenceReportingAssessmentSubmissions()
+      }),
+      now: new Date('2026-06-09T15:00:00.000Z')
+    });
+
+    expect(result).toMatchObject({
+      reportName: 'cadence-analytics',
+      status: 'ok',
+      totals: {
+        records: 6,
+        tasks: 4,
+        touches: 5,
+        responses: 1,
+        noResponses: 1,
+        assessmentRequests: 1,
+        assessmentCompletions: 1,
+        discoveryAsks: 1,
+        discoveryReady: 1
+      }
+    });
+    expect(result.byCadence).toMatchObject({
+      relationship_building_v1: 4,
+      assessment_campaign_v1: 2
+    });
+    expect(result.byStage).toMatchObject({
+      connection_request: 1,
+      intro_message: 1,
+      value_touch: 1,
+      assessment_positioning: 1,
+      assessment_sent: 1
+    });
+    expect(result.byChannel).toMatchObject({
+      linkedin: 4,
+      email: 1
+    });
+    expect(result.byTouchStatus).toMatchObject({
+      sent: 3,
+      responded: 1,
+      no_response: 1
+    });
+    expect(result.tasksByCadenceStageTaskType).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          cadenceName: 'RELATIONSHIP_BUILDING_V1',
+          cadenceStage: 'INTRO_MESSAGE',
+          taskType: 'INTRO_MESSAGE',
+          count: 1
+        }),
+        expect.objectContaining({
+          cadenceName: 'ASSESSMENT_CAMPAIGN_V1',
+          cadenceStage: 'ASSESSMENT_SENT',
+          taskType: 'ASSESSMENT_SENT',
+          count: 1
+        })
+      ])
+    );
+    expect(result.conversionSummary).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: 'connection_request_to_intro_message',
+          confidence: 'high',
+          fromCount: 1,
+          toCount: 1,
+          conversionRate: 1
+        }),
+        expect.objectContaining({
+          key: 'discovery_ask_to_discovery_ready',
+          confidence: 'medium'
+        })
+      ])
+    );
+    expect(result.diagnostics.conversionConfidenceSummary).toMatchObject({
+      high: expect.any(Number)
+    });
+  });
+
+  it('filters cadence analytics by date range, cadence name, and owner scope', async () => {
+    const result = await getCadenceAnalyticsReportingWorkflow({
+      query: {
+        ownerScope: 'all',
+        assigneeScope: 'all',
+        startDate: '2026-06-07',
+        endDate: '2026-06-09',
+        cadenceName: 'ASSESSMENT_CAMPAIGN_V1'
+      },
+      config: baseConfig,
+      workspaceUser: repUser,
+      dataSource: fakeReportingDataSource({
+        people: [
+          ...cadenceReportingPeople(),
+          reportingLead('people-other-owner-cadence', {
+            owner: {
+              userEmail: 'other@visiblegap.com',
+              name: 'Other Rep'
+            },
+            cadenceName: 'ASSESSMENT_CAMPAIGN_V1',
+            cadenceStage: 'ASSESSMENT_SENT',
+            latestTouchStatus: 'SENT'
+          })
+        ],
+        tasks: cadenceReportingTasks(),
+        taskTargets: cadenceReportingTaskTargets()
+      }),
+      activitySource: fakeActivitySource({
+        outboundEvents: cadenceReportingOutboundEvents(),
+        crmSyncLogs: [],
+        assessmentSubmissions: cadenceReportingAssessmentSubmissions()
+      }),
+      now: new Date('2026-06-09T15:00:00.000Z')
+    });
+
+    expect(result.ownerScope).toBe('mine');
+    expect(result.cadenceName).toBe('ASSESSMENT_CAMPAIGN_V1');
+    expect(result.totals.records).toBe(2);
+    expect(result.totals.touches).toBe(1);
+    expect(result.totals.assessmentRequests).toBe(1);
+    expect(result.totals.assessmentCompletions).toBe(1);
+    expect(result.byCadence).toEqual({
+      assessment_campaign_v1: 2
+    });
+    expect(result.byChannel).toEqual({
+      email: 1
+    });
+  });
+
+  it('returns the reporting API envelope for cadence analytics', async () => {
+    const response = await invokeReportingRoute({
+      type: 'cadence-analytics',
+      headers: {
+        authorization: 'Bearer valid-token'
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({
+      ok: true,
+      correlationId: 'reporting-route-correlation',
+      data: {
+        reportName: 'cadence-analytics',
+        totals: expect.any(Object),
+        byCadence: expect.any(Object),
+        conversionSummary: expect.any(Array)
+      },
+      errors: []
+    });
+  });
+
   it('uses read-only reporting sources without write methods', async () => {
     const readOnlySource = fakeReportingDataSource();
     const readOnlyActivity = fakeActivitySource();
@@ -555,6 +723,18 @@ describe('reporting workflows', () => {
     });
 
     expect(activityReadCount).toBe(2);
+
+    await getCadenceAnalyticsReportingWorkflow({
+      query: {},
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: wrappedSource,
+      activitySource: wrappedActivity,
+      now: new Date('2026-06-09T15:00:00.000Z')
+    });
+
+    expect(sourceReadCount).toBe(2);
+    expect(activityReadCount).toBe(3);
   });
 
   it('reports degraded status instead of empty metrics when critical reporting reads fail', async () => {
@@ -656,6 +836,23 @@ async function invokeReportingRoute({
         outboundEvents: operationsOutboundEvents(),
         crmSyncLogs: operationsCrmSyncLogs(),
         assessmentSubmissions: operationsAssessmentSubmissions()
+      })
+    });
+  }
+
+  if (authenticated && type === 'cadence-analytics') {
+    await handleCadenceAnalyticsReportingFetch(req, res, next, {
+      config,
+      log: silentLog,
+      dataSource: fakeReportingDataSource({
+        people: cadenceReportingPeople(),
+        tasks: cadenceReportingTasks(),
+        taskTargets: cadenceReportingTaskTargets()
+      }),
+      activitySource: fakeActivitySource({
+        outboundEvents: cadenceReportingOutboundEvents(),
+        crmSyncLogs: [],
+        assessmentSubmissions: cadenceReportingAssessmentSubmissions()
       })
     });
   }
@@ -1002,6 +1199,235 @@ function reportingAssessmentSubmissions() {
           email: 'rep@visiblegap.com',
           fullName: 'Visible Gap Rep'
         }
+      }
+    }
+  ];
+}
+
+function cadenceReportingPeople() {
+  return [
+    reportingLead('cadence-connection', {
+      cadenceName: 'RELATIONSHIP_BUILDING_V1',
+      cadenceStage: 'CONNECTION_REQUEST',
+      latestTouchStatus: 'SENT'
+    }),
+    reportingLead('cadence-intro', {
+      cadenceName: 'RELATIONSHIP_BUILDING_V1',
+      cadenceStage: 'INTRO_MESSAGE',
+      latestTouchStatus: 'RESPONDED'
+    }),
+    reportingLead('cadence-value', {
+      cadenceName: 'RELATIONSHIP_BUILDING_V1',
+      cadenceStage: 'VALUE_TOUCH',
+      latestTouchStatus: 'NO_RESPONSE'
+    }),
+    reportingLead('cadence-discovery-ready', {
+      cadenceName: 'RELATIONSHIP_BUILDING_V1',
+      cadenceStage: 'DISCOVERY_ASK',
+      latestTouchStatus: 'RESPONDED',
+      discoveryReadiness: 'READY'
+    }),
+    reportingLead('cadence-assessment-positioning', {
+      cadenceName: 'ASSESSMENT_CAMPAIGN_V1',
+      cadenceStage: 'ASSESSMENT_POSITIONING',
+      latestTouchStatus: 'SENT'
+    }),
+    reportingLead('cadence-assessment-sent', {
+      cadenceName: 'ASSESSMENT_CAMPAIGN_V1',
+      cadenceStage: 'ASSESSMENT_SENT',
+      latestTouchStatus: 'SENT'
+    }),
+    reportingLead('cadence-test', {
+      name: {
+        firstName: 'Cadence',
+        lastName: 'Test'
+      },
+      emails: {
+        primaryEmail: 'cadence-test@example.com'
+      }
+    })
+  ];
+}
+
+function cadenceReportingTasks() {
+  return [
+    reportingTask('cadence-task-connection', {
+      title: 'Send relationship-oriented connection request',
+      bodyV2: {
+        markdown: [
+          'Person ID: cadence-connection',
+          'Cadence: RELATIONSHIP_BUILDING_V1',
+          'Cadence stage: CONNECTION_REQUEST',
+          'Task type: connection_request'
+        ].join('\n')
+      }
+    }),
+    reportingTask('cadence-task-intro', {
+      title: 'Send relationship follow-up / intro message',
+      bodyV2: {
+        markdown: [
+          'Person ID: cadence-intro',
+          'Cadence: RELATIONSHIP_BUILDING_V1',
+          'Next cadence stage: INTRO_MESSAGE',
+          'Task type: intro_message'
+        ].join('\n')
+      }
+    }),
+    reportingTask('cadence-task-value', {
+      title: 'Send value touch',
+      bodyV2: {
+        markdown: [
+          'Person ID: cadence-value',
+          'Cadence: RELATIONSHIP_BUILDING_V1',
+          'Cadence stage: VALUE_TOUCH',
+          'Task type: value_touch'
+        ].join('\n')
+      }
+    }),
+    reportingTask('cadence-task-assessment', {
+      title: 'Send Spot the Gap assessment link',
+      bodyV2: {
+        markdown: [
+          'Person ID: cadence-assessment-sent',
+          'Cadence: ASSESSMENT_CAMPAIGN_V1',
+          'Next cadence stage: ASSESSMENT_SENT',
+          'Task type: assessment_sent'
+        ].join('\n')
+      }
+    })
+  ];
+}
+
+function cadenceReportingTaskTargets() {
+  return [
+    {
+      id: 'cadence-target-connection',
+      taskId: 'cadence-task-connection',
+      targetPersonId: 'cadence-connection'
+    },
+    {
+      id: 'cadence-target-intro',
+      taskId: 'cadence-task-intro',
+      targetPersonId: 'cadence-intro'
+    },
+    {
+      id: 'cadence-target-value',
+      taskId: 'cadence-task-value',
+      targetPersonId: 'cadence-value'
+    },
+    {
+      id: 'cadence-target-assessment',
+      taskId: 'cadence-task-assessment',
+      targetPersonId: 'cadence-assessment-sent'
+    }
+  ];
+}
+
+function cadenceReportingOutboundEvents() {
+  return [
+    {
+      id: 'cadence-event-connection-to-intro',
+      event_type: 'task_completed',
+      status: 'sent',
+      created_at: '2026-06-02T12:00:00.000Z',
+      payload: {
+        cadenceName: 'RELATIONSHIP_BUILDING_V1',
+        oldCadenceStage: 'CONNECTION_REQUEST',
+        newCadenceStage: 'INTRO_MESSAGE',
+        completion: {
+          channel: 'LINKEDIN',
+          touchStatus: 'SENT'
+        }
+      }
+    },
+    {
+      id: 'cadence-event-intro-to-value',
+      event_type: 'task_completed',
+      status: 'sent',
+      created_at: '2026-06-04T12:00:00.000Z',
+      payload: {
+        cadenceName: 'RELATIONSHIP_BUILDING_V1',
+        oldCadenceStage: 'INTRO_MESSAGE',
+        newCadenceStage: 'VALUE_TOUCH',
+        completion: {
+          channel: 'LINKEDIN',
+          touchStatus: 'RESPONDED'
+        }
+      }
+    },
+    {
+      id: 'cadence-event-no-response',
+      event_type: 'task_completed',
+      status: 'sent',
+      created_at: '2026-06-05T12:00:00.000Z',
+      payload: {
+        cadenceName: 'RELATIONSHIP_BUILDING_V1',
+        cadenceStage: 'VALUE_TOUCH',
+        completion: {
+          channel: 'LINKEDIN',
+          touchStatus: 'NO_RESPONSE'
+        }
+      }
+    },
+    {
+      id: 'cadence-event-discovery',
+      event_type: 'task_completed',
+      status: 'sent',
+      created_at: '2026-06-08T12:00:00.000Z',
+      payload: {
+        cadenceName: 'RELATIONSHIP_BUILDING_V1',
+        nextCadenceStage: 'DISCOVERY_ASK',
+        completion: {
+          channel: 'LINKEDIN',
+          touchStatus: 'SENT'
+        }
+      }
+    },
+    {
+      id: 'cadence-event-assessment-request',
+      event_type: 'assessment_requested',
+      status: 'sent',
+      created_at: '2026-06-08T13:00:00.000Z',
+      payload: {
+        cadenceName: 'ASSESSMENT_CAMPAIGN_V1',
+        oldCadenceStage: 'ASSESSMENT_POSITIONING',
+        newCadenceStage: 'ASSESSMENT_SENT',
+        completion: {
+          channel: 'EMAIL',
+          touchStatus: 'SENT'
+        }
+      }
+    },
+    {
+      id: 'cadence-event-assessment-old',
+      event_type: 'assessment_requested',
+      status: 'sent',
+      created_at: '2026-05-01T13:00:00.000Z',
+      payload: {
+        cadenceName: 'ASSESSMENT_CAMPAIGN_V1',
+        completion: {
+          channel: 'EMAIL',
+          touchStatus: 'SENT'
+        }
+      }
+    }
+  ];
+}
+
+function cadenceReportingAssessmentSubmissions() {
+  return [
+    {
+      id: 'cadence-assessment-submission',
+      created_at: '2026-06-08T14:00:00.000Z',
+      normalized_payload: {
+        cadenceName: 'ASSESSMENT_CAMPAIGN_V1'
+      }
+    },
+    {
+      id: 'cadence-assessment-submission-old',
+      created_at: '2026-05-01T14:00:00.000Z',
+      normalized_payload: {
+        cadenceName: 'ASSESSMENT_CAMPAIGN_V1'
       }
     }
   ];

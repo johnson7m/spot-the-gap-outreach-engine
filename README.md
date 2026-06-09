@@ -125,6 +125,7 @@ GET /api/reporting/executive
 GET /api/reporting/queue-health
 GET /api/reporting/rep-performance
 GET /api/reporting/operations
+GET /api/reporting/cadence-analytics
 ```
 
 Preview is dry-run only and is intended for the internal
@@ -617,6 +618,8 @@ Read-only reporting endpoints:
 GET /api/reporting/executive
 GET /api/reporting/queue-health
 GET /api/reporting/rep-performance
+GET /api/reporting/operations
+GET /api/reporting/cadence-analytics
 ```
 
 These endpoints require Supabase workspace JWT auth and role `admin`,
@@ -628,6 +631,10 @@ metrics from Twenty current state plus Supabase activity logs when configured.
 Phase 3 adds read-only operations reporting from Supabase `outbound_events`,
 `crm_sync_logs`, and `assessment_submissions`. Reporting performs no CRM or
 Supabase writes.
+Phase 4 adds read-only cadence analytics from Twenty cadence/task state plus
+Supabase `outbound_events` and `assessment_submissions`. Conversion rows include
+`high`, `medium`, or `low` confidence so approximate current-state conversions
+are not mistaken for fully historical funnel rates.
 
 Diagnostic scripts:
 
@@ -636,13 +643,15 @@ npm run reporting:executive
 npm run reporting:queue-health
 npm run reporting:rep-performance
 npm run reporting:operations
+npm run reporting:cadence-analytics
 ```
 
 Set `REPORTING_OWNER_SCOPE=mine|all`, `REPORTING_ASSIGNEE_SCOPE=mine|all`,
 `REPORTING_INCLUDE_DIAGNOSTICS=true`, `REPORTING_START_DATE=YYYY-MM-DD`,
-`REPORTING_END_DATE=YYYY-MM-DD`, or `BYPASS_QUEUE_CACHE=true` for local
-read-only reporting diagnostics. Rep performance and operations default to the
-last 30 days when no date range is provided.
+`REPORTING_END_DATE=YYYY-MM-DD`, `REPORTING_CADENCE_NAME=RELATIONSHIP_BUILDING_V1`,
+or `BYPASS_QUEUE_CACHE=true` for local read-only reporting diagnostics. Rep
+performance, operations, and cadence analytics default to the last 30 days when
+no date range is provided.
 
 Workspace auth flags:
 

@@ -4,6 +4,7 @@ import { getExecutiveReportingWorkflow } from '../../workflows/reporting/getExec
 import { getQueueHealthReportingWorkflow } from '../../workflows/reporting/getQueueHealthReportingWorkflow.js';
 import { getOperationsReportingWorkflow } from '../../workflows/reporting/getOperationsReportingWorkflow.js';
 import { getRepPerformanceReportingWorkflow } from '../../workflows/reporting/getRepPerformanceReportingWorkflow.js';
+import { getCadenceAnalyticsReportingWorkflow } from '../../workflows/reporting/getCadenceAnalyticsReportingWorkflow.js';
 
 const REPORTING_WORKSPACE_ROLES = ['admin', 'operator', 'rep'];
 
@@ -14,6 +15,7 @@ export function createReportingApiRouter({
   getQueueHealthReportingWorkflowFn = getQueueHealthReportingWorkflow,
   getRepPerformanceReportingWorkflowFn = getRepPerformanceReportingWorkflow,
   getOperationsReportingWorkflowFn = getOperationsReportingWorkflow,
+  getCadenceAnalyticsReportingWorkflowFn = getCadenceAnalyticsReportingWorkflow,
   workspaceAuthSupabaseClient,
   dataSource,
   activitySource
@@ -88,6 +90,25 @@ export function createReportingApiRouter({
         config,
         log,
         getOperationsReportingWorkflowFn,
+        activitySource
+      });
+    }
+  );
+
+  router.get(
+    '/cadence-analytics',
+    requireWorkspaceAuth({
+      config,
+      log,
+      allowedRoles: REPORTING_WORKSPACE_ROLES,
+      supabaseClient: workspaceAuthSupabaseClient
+    }),
+    async (req, res, next) => {
+      await handleCadenceAnalyticsReportingFetch(req, res, next, {
+        config,
+        log,
+        getCadenceAnalyticsReportingWorkflowFn,
+        dataSource,
         activitySource
       });
     }
@@ -196,6 +217,35 @@ export async function handleOperationsReportingFetch(
       config,
       log: req.log ?? log,
       workspaceUser: req.workspaceUser,
+      activitySource,
+      correlationId: req.correlationId
+    });
+
+    res.json(successEnvelope({ correlationId: req.correlationId, data: result, warnings: result.warnings }));
+  } catch (error) {
+    handleReportingError(error, req, res, next);
+  }
+}
+
+export async function handleCadenceAnalyticsReportingFetch(
+  req,
+  res,
+  next,
+  {
+    config = {},
+    log,
+    getCadenceAnalyticsReportingWorkflowFn = getCadenceAnalyticsReportingWorkflow,
+    dataSource,
+    activitySource
+  } = {}
+) {
+  try {
+    const result = await getCadenceAnalyticsReportingWorkflowFn({
+      query: req.query ?? {},
+      config,
+      log: req.log ?? log,
+      workspaceUser: req.workspaceUser,
+      dataSource,
       activitySource,
       correlationId: req.correlationId
     });

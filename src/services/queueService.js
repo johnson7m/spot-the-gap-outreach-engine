@@ -562,6 +562,7 @@ function coverageBaseRecord(person) {
     cadenceName: person.cadenceName || null,
     cadenceStage: person.cadenceStage || null,
     latestTouchStatus: person.latestTouchStatus || null,
+    discoveryReadiness: person.discoveryReadiness || null,
     assessmentCompleted: Boolean(person.assessmentCompleted),
     staleRisk: person.staleRisk || null
   };

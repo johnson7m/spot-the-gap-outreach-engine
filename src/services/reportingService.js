@@ -15,6 +15,34 @@ const QUEUE_SLUGS = [
 ];
 
 const OPEN_TASK_STATUSES = new Set(['TODO', 'OPEN', 'IN_PROGRESS', 'NOT_STARTED']);
+const DISCOVERY_READY_STATUSES = new Set(['READY', 'REQUESTED', 'BOOKED', 'DISCOVERY_READY']);
+const CADENCE_CONVERSIONS = [
+  {
+    key: 'connection_request_to_intro_message',
+    fromStage: 'CONNECTION_REQUEST',
+    toStages: ['INTRO_MESSAGE']
+  },
+  {
+    key: 'intro_message_to_value_or_strategic_check_in',
+    fromStage: 'INTRO_MESSAGE',
+    toStages: ['VALUE_TOUCH', 'STRATEGIC_CHECK_IN']
+  },
+  {
+    key: 'assessment_positioning_to_assessment_sent',
+    fromStage: 'ASSESSMENT_POSITIONING',
+    toStages: ['ASSESSMENT_SENT']
+  },
+  {
+    key: 'assessment_sent_to_assessment_check_in',
+    fromStage: 'ASSESSMENT_SENT',
+    toStages: ['ASSESSMENT_CHECK_IN']
+  },
+  {
+    key: 'discovery_ask_to_discovery_ready',
+    fromStage: 'DISCOVERY_ASK',
+    toStages: ['DISCOVERY_READY']
+  }
+];
 
 export function buildExecutiveReporting({
   people = [],
@@ -337,6 +365,143 @@ export function buildRepPerformanceReporting({
   };
 }
 
+export function buildCadenceAnalyticsReporting({
+  people = [],
+  companies = [],
+  tasks = [],
+  taskTargets = [],
+  workspaceMembers = [],
+  outboundEvents = [],
+  assessmentSubmissions = [],
+  workspaceUser = {},
+  query = {},
+  now = new Date(),
+  diagnostics = {}
+} = {}) {
+  const snapshot = buildReportingSnapshot({
+    people,
+    companies,
+    tasks,
+    taskTargets,
+    workspaceMembers,
+    workspaceUser,
+    query,
+    now
+  });
+  const dateRange = resolveReportingDateRange(query, now);
+  const cadenceFilter = normalizeSelect(query.cadenceName);
+  const cadenceRecords = snapshot.realCoverageRecords.filter((record) =>
+    cadenceFilter ? normalizeSelect(record.cadenceName) === cadenceFilter : true
+  );
+  const cadenceTasks = snapshot.scopedTasks
+    .map((task) => ({
+      task,
+      cadence: readTaskCadenceAnalytics(task)
+    }))
+    .filter(({ cadence }) =>
+      cadenceFilter ? normalizeSelect(cadence.cadenceName) === cadenceFilter : true
+    );
+  const cadenceEvents = outboundEvents
+    .filter((event) => isWithinDateRange(readRecordDate(event), dateRange))
+    .map((event) => ({
+      event,
+      analytics: readOutboundEventCadenceAnalytics(event)
+    }))
+    .filter(({ analytics }) =>
+      cadenceFilter ? normalizeSelect(analytics.cadenceName) === cadenceFilter : true
+    );
+  const cadenceSubmissions = assessmentSubmissions
+    .filter((submission) => isWithinDateRange(readRecordDate(submission), dateRange))
+    .filter((submission) =>
+      cadenceFilter
+        ? normalizeSelect(readAssessmentSubmissionCadenceName(submission)) === cadenceFilter
+        : true
+    );
+  const responses = cadenceEvents.filter(({ analytics }) =>
+    isResponseTouchStatus(analytics.touchStatus, analytics.eventType)
+  ).length;
+  const noResponses = cadenceEvents.filter(({ analytics }) =>
+    normalizeSelect(analytics.touchStatus) === 'NO_RESPONSE'
+  ).length;
+  const assessmentRequests = cadenceEvents.filter(({ analytics }) =>
+    isAssessmentRequestAnalytics(analytics)
+  ).length;
+  const discoveryAsks = cadenceEvents.filter(({ analytics }) =>
+    isDiscoveryAskAnalytics(analytics)
+  ).length;
+  const discoveryReady = cadenceRecords.filter((record) =>
+    isDiscoveryReadyRecord(record)
+  ).length;
+  const conversionSummary = buildCadenceConversionSummary({
+    records: cadenceRecords,
+    events: cadenceEvents.map(({ analytics }) => analytics),
+    discoveryReady
+  });
+  const warnings = uniqueStrings([
+    'Cadence conversion metrics are approximate unless the conversion confidence is high; current event taxonomy does not always store complete stage-transition history.',
+    ...conversionSummary.flatMap((conversion) => conversion.warnings ?? [])
+  ]);
+
+  return {
+    reportName: 'cadence-analytics',
+    generatedAt: now.toISOString(),
+    ownerScope: snapshot.normalizedQuery.ownerScope,
+    assigneeScope: snapshot.normalizedQuery.assigneeScope,
+    cadenceName: cadenceFilter || null,
+    dateRange: {
+      startDate: dateRange.startDate.toISOString(),
+      endDate: endOfDay(dateRange.endDate).toISOString()
+    },
+    totals: {
+      records: cadenceRecords.length,
+      tasks: cadenceTasks.length,
+      touches: cadenceEvents.length,
+      responses,
+      noResponses,
+      assessmentRequests,
+      assessmentCompletions: cadenceSubmissions.length,
+      discoveryAsks,
+      discoveryReady
+    },
+    byCadence: countBy(cadenceRecords, (record) =>
+      normalizeKey(record.cadenceName || 'unknown')
+    ),
+    byStage: countBy(cadenceRecords, (record) =>
+      normalizeKey(record.cadenceStage || 'unknown')
+    ),
+    tasksByCadenceStageTaskType: buildTaskCadenceBreakdown(cadenceTasks),
+    byChannel: countBy(cadenceEvents, ({ analytics }) =>
+      normalizeKey(analytics.channel || 'unknown')
+    ),
+    byTouchStatus: countBy(cadenceEvents, ({ analytics }) =>
+      normalizeKey(analytics.touchStatus || analytics.status || 'unknown')
+    ),
+    conversionSummary,
+    diagnostics: snapshot.normalizedQuery.includeDiagnostics
+      ? {
+          ...diagnostics,
+          cadenceFilterApplied: cadenceFilter || null,
+          sourceCounts: {
+            people: people.length,
+            tasks: tasks.length,
+            taskTargets: taskTargets.length,
+            outboundEvents: outboundEvents.length,
+            assessmentSubmissions: assessmentSubmissions.length
+          },
+          inRangeCounts: {
+            outboundEvents: cadenceEvents.length,
+            assessmentSubmissions: cadenceSubmissions.length
+          },
+          countsByDisposition: snapshot.scopedSummary.countsByDisposition,
+          conversionConfidenceSummary: countBy(conversionSummary, (conversion) =>
+            conversion.confidence
+          )
+        }
+      : undefined,
+    warnings
+  };
+}
+
 export function buildOperationsReporting({
   outboundEvents = [],
   crmSyncLogs = [],
@@ -441,6 +606,326 @@ export function buildOperationsReporting({
       : undefined,
     warnings: []
   };
+}
+
+function readTaskCadenceAnalytics(task = {}) {
+  const body = readTaskBodyText(task);
+  const title = firstString(task.title, task.name);
+  const cadenceName = normalizeSelect(
+    firstString(
+      task.cadenceName,
+      task.cadence_name,
+      readMarkdownValue(body, 'Cadence'),
+      readMarkdownValue(body, 'Cadence name')
+    )
+  );
+  const cadenceStage = normalizeSelect(
+    firstString(
+      task.cadenceStage,
+      task.cadence_stage,
+      task.nextCadenceStage,
+      readMarkdownValue(body, 'Cadence stage'),
+      readMarkdownValue(body, 'Next cadence stage'),
+      inferCadenceStageFromTaskTitle(title)
+    )
+  );
+  const taskType = normalizeSelect(
+    firstString(
+      task.taskType,
+      task.task_type,
+      readMarkdownValue(body, 'Task type'),
+      inferTaskTypeFromTitle(title, cadenceStage)
+    )
+  );
+
+  return {
+    cadenceName: cadenceName || 'UNKNOWN',
+    cadenceStage: cadenceStage || 'UNKNOWN',
+    taskType: taskType || 'UNKNOWN'
+  };
+}
+
+function readOutboundEventCadenceAnalytics(event = {}) {
+  const payload = event.payload ?? {};
+  const completion = payload.completion ?? {};
+  const eventType = readEventType(event);
+  const status = normalizeSelect(event.status);
+  const oldStage = normalizeSelect(
+    firstString(
+      payload.oldCadenceStage,
+      payload.previousCadenceStage,
+      payload.fromCadenceStage,
+      payload.cadenceStageBefore,
+      completion.oldCadenceStage,
+      completion.previousCadenceStage
+    )
+  );
+  const currentStage = normalizeSelect(
+    firstString(payload.cadenceStage, completion.cadenceStage)
+  );
+  const newStage = normalizeSelect(
+    firstString(
+      payload.newCadenceStage,
+      payload.nextCadenceStage,
+      payload.recommendedNextCadenceStage,
+      payload.toCadenceStage,
+      payload.cadenceStageAfter,
+      completion.newCadenceStage,
+      completion.nextCadenceStage,
+      completion.cadenceStage
+    )
+  );
+
+  return {
+    eventType,
+    status,
+    cadenceName: normalizeSelect(
+      firstString(
+        payload.cadenceName,
+        payload.cadence_name,
+        payload.cadence?.cadenceName,
+        payload.cadence?.name,
+        completion.cadenceName
+      )
+    ),
+    channel: normalizeSelect(
+      firstString(
+        payload.channel,
+        payload.latestTouchChannel,
+        payload.touchChannel,
+        completion.channel,
+        event.channel
+      )
+    ),
+    touchStatus: normalizeSelect(
+      firstString(
+        payload.touchStatus,
+        payload.latestTouchStatus,
+        payload.touch_status,
+        completion.touchStatus,
+        completion.status,
+        event.touchStatus,
+        event.touch_status,
+        event.status
+      )
+    ),
+    oldStage,
+    currentStage,
+    newStage,
+    stage: newStage || currentStage || oldStage
+  };
+}
+
+function readAssessmentSubmissionCadenceName(submission = {}) {
+  const normalizedPayload = submission.normalized_payload ?? submission.normalizedPayload ?? {};
+  const rawPayload = submission.raw_payload ?? submission.rawPayload ?? {};
+
+  return firstString(
+    submission.cadenceName,
+    submission.cadence_name,
+    normalizedPayload.cadenceName,
+    normalizedPayload.cadence_name,
+    rawPayload.cadenceName,
+    rawPayload.cadence_name
+  );
+}
+
+function buildTaskCadenceBreakdown(cadenceTasks = []) {
+  const rows = new Map();
+
+  for (const { cadence } of cadenceTasks) {
+    const cadenceName = normalizeSelect(cadence.cadenceName) || 'UNKNOWN';
+    const cadenceStage = normalizeSelect(cadence.cadenceStage) || 'UNKNOWN';
+    const taskType = normalizeSelect(cadence.taskType) || 'UNKNOWN';
+    const key = [cadenceName, cadenceStage, taskType].join('|');
+    const existing = rows.get(key) ?? {
+      cadenceName,
+      cadenceStage,
+      taskType,
+      count: 0
+    };
+
+    existing.count += 1;
+    rows.set(key, existing);
+  }
+
+  return [...rows.values()].sort((left, right) =>
+    [left.cadenceName, left.cadenceStage, left.taskType]
+      .join('|')
+      .localeCompare([right.cadenceName, right.cadenceStage, right.taskType].join('|'))
+  );
+}
+
+function buildCadenceConversionSummary({ records = [], events = [], discoveryReady = 0 } = {}) {
+  return CADENCE_CONVERSIONS.map((definition) => {
+    const eventTransitions = events.filter((event) =>
+      matchesCadenceTransition(event, definition.fromStage, definition.toStages)
+    );
+    const explicitDenominator = events.filter(
+      (event) => normalizeSelect(event.oldStage) === definition.fromStage
+    ).length;
+
+    if (explicitDenominator > 0) {
+      return buildConversionRow({
+        definition,
+        basis: 'explicit_event_stage_transitions',
+        fromCount: explicitDenominator,
+        toCount: eventTransitions.length,
+        confidence: 'high',
+        warnings: []
+      });
+    }
+
+    const fromCount = records.filter((record) =>
+      normalizeSelect(record.cadenceStage) === definition.fromStage
+    ).length;
+    const toCount =
+      definition.key === 'discovery_ask_to_discovery_ready'
+        ? discoveryReady
+        : records.filter((record) =>
+            definition.toStages.includes(normalizeSelect(record.cadenceStage))
+          ).length;
+    const confidence =
+      definition.key === 'discovery_ask_to_discovery_ready' && discoveryReady > 0 ? 'medium' : 'low';
+
+    return buildConversionRow({
+      definition,
+      basis:
+        confidence === 'medium'
+          ? 'current_crm_discovery_readiness'
+          : 'current_crm_stage_snapshot',
+      fromCount,
+      toCount,
+      confidence,
+      warnings: [
+        'No explicit old/new cadence-stage transition events were found for this conversion; metric is based on current CRM state only.'
+      ]
+    });
+  });
+}
+
+function buildConversionRow({
+  definition,
+  basis,
+  fromCount,
+  toCount,
+  confidence,
+  warnings = []
+} = {}) {
+  return {
+    key: definition.key,
+    fromStage: definition.fromStage,
+    toStages: definition.toStages,
+    fromCount,
+    toCount,
+    conversionRate: calculateConversionRate({ fromCount, toCount, confidence }),
+    confidence,
+    basis,
+    approximate: confidence !== 'high',
+    warnings
+  };
+}
+
+function calculateConversionRate({ fromCount = 0, toCount = 0, confidence = 'low' } = {}) {
+  if (confidence === 'high') {
+    return fromCount > 0 ? Number((toCount / fromCount).toFixed(4)) : null;
+  }
+
+  const currentStateTotal = fromCount + toCount;
+
+  return currentStateTotal > 0 ? Number((toCount / currentStateTotal).toFixed(4)) : null;
+}
+
+function matchesCadenceTransition(event = {}, fromStage = '', toStages = []) {
+  const oldStage = normalizeSelect(event.oldStage);
+  const newStage = normalizeSelect(event.newStage || event.stage);
+
+  return oldStage === fromStage && toStages.includes(newStage);
+}
+
+function isResponseTouchStatus(touchStatus, eventType) {
+  return normalizeSelect(touchStatus) === 'RESPONDED' || normalizeSelect(eventType) === 'RESPONSE_RECEIVED';
+}
+
+function isAssessmentRequestAnalytics(analytics = {}) {
+  return (
+    analytics.eventType === 'ASSESSMENT_REQUESTED' ||
+    ['ASSESSMENT_POSITIONING', 'ASSESSMENT_SENT'].includes(analytics.stage)
+  );
+}
+
+function isDiscoveryAskAnalytics(analytics = {}) {
+  return analytics.eventType === 'DISCOVERY_REQUESTED' || analytics.stage === 'DISCOVERY_ASK';
+}
+
+function isDiscoveryReadyRecord(record = {}) {
+  return (
+    DISCOVERY_READY_STATUSES.has(normalizeSelect(record.discoveryReadiness)) ||
+    normalizeSelect(record.cadenceStage) === 'DISCOVERY_READY'
+  );
+}
+
+function readTaskBodyText(task = {}) {
+  return firstString(
+    task.bodyV2?.markdown,
+    task.bodyV2?.text,
+    task.body,
+    task.description,
+    task.note
+  );
+}
+
+function readMarkdownValue(body = '', label = '') {
+  if (!body || !label) {
+    return '';
+  }
+
+  const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = String(body).match(new RegExp(`^\\s*${escapedLabel}\\s*:\\s*(.+?)\\s*$`, 'im'));
+
+  return match?.[1]?.trim() ?? '';
+}
+
+function inferTaskTypeFromTitle(title = '', cadenceStage = '') {
+  const normalizedTitle = String(title).toLowerCase();
+
+  if (normalizedTitle.includes('connection request')) {
+    return 'CONNECTION_REQUEST';
+  }
+
+  if (normalizedTitle.includes('intro')) {
+    return 'INTRO_MESSAGE';
+  }
+
+  if (normalizedTitle.includes('value touch')) {
+    return 'VALUE_TOUCH';
+  }
+
+  if (normalizedTitle.includes('assessment positioning')) {
+    return 'ASSESSMENT_POSITIONING';
+  }
+
+  if (normalizedTitle.includes('assessment') && normalizedTitle.includes('check')) {
+    return 'ASSESSMENT_CHECK_IN';
+  }
+
+  if (normalizedTitle.includes('assessment')) {
+    return 'ASSESSMENT_SENT';
+  }
+
+  if (normalizedTitle.includes('strategic')) {
+    return 'STRATEGIC_CHECK_IN';
+  }
+
+  if (normalizedTitle.includes('discovery')) {
+    return 'DISCOVERY_ASK';
+  }
+
+  return cadenceStage || '';
+}
+
+function inferCadenceStageFromTaskTitle(title = '') {
+  return inferTaskTypeFromTitle(title);
 }
 
 function buildReportingSnapshot({
@@ -1450,4 +1935,8 @@ function firstString(...values) {
   }
 
   return '';
+}
+
+function uniqueStrings(values = []) {
+  return Array.from(new Set(values.filter((value) => typeof value === 'string' && value.length > 0)));
 }

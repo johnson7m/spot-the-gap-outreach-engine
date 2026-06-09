@@ -3,8 +3,9 @@
 This document defines the reporting architecture for the Visible Gap Workspace.
 Phase 1 implements read-only backend reporting endpoints for executive and queue
 health metrics. Phase 2 implements read-only rep-performance reporting. Phase 3
-implements read-only operations reporting from Supabase operational logs. Later
-phases remain planning-only until explicitly implemented.
+implements read-only operations reporting from Supabase operational logs. Phase
+4 implements read-only cadence analytics with confidence-labeled conversion
+metrics.
 Reporting does not perform CRM writes, schema migrations, dashboard UI changes,
 or assessment webhook changes.
 
@@ -16,6 +17,7 @@ Implemented read-only endpoints:
 - `GET /api/reporting/queue-health`
 - `GET /api/reporting/rep-performance`
 - `GET /api/reporting/operations`
+- `GET /api/reporting/cadence-analytics`
 
 Implemented read-only diagnostic scripts:
 
@@ -23,6 +25,7 @@ Implemented read-only diagnostic scripts:
 - `npm run reporting:queue-health`
 - `npm run reporting:rep-performance`
 - `npm run reporting:operations`
+- `npm run reporting:cadence-analytics`
 
 Phase 1/2 reporting reuses the same Twenty source reads, queue read
 cache/degraded handling, test-record hiding, owner scope rules, queue
@@ -31,6 +34,10 @@ endpoints. Rep Performance additionally reads Supabase `outbound_events`,
 `crm_sync_logs`, and `assessment_submissions` when Supabase is configured.
 Operations reporting reads Supabase activity logs only and does not perform
 Twenty reads.
+Cadence Analytics reads Twenty current cadence/task state plus Supabase
+`outbound_events` and `assessment_submissions` when configured. Conversion
+metrics intentionally include confidence flags because current event taxonomy
+does not always store complete old/new stage transitions.
 
 ## Reporting Principles
 
@@ -401,26 +408,89 @@ Response contract:
 ```json
 {
   "data": {
-    "range": { "from": "2026-06-01", "to": "2026-06-30" },
-    "stageActivity": {
-      "connectionRequests": 0,
-      "introMessages": 0,
-      "assessmentPositioning": 0,
-      "assessmentFollowUp": 0,
-      "strategicCheckIn": 0,
-      "discoveryAsk": 0
+    "reportName": "cadence-analytics",
+    "generatedAt": "2026-06-09T00:00:00.000Z",
+    "ownerScope": "all",
+    "assigneeScope": "all",
+    "cadenceName": "RELATIONSHIP_BUILDING_V1",
+    "dateRange": {
+      "startDate": "2026-06-01T00:00:00.000Z",
+      "endDate": "2026-06-30T23:59:59.999Z"
     },
-    "conversions": {
-      "stageToStage": [],
-      "responseRate": null,
-      "discoveryRate": null,
-      "assessmentCompletionRate": null
+    "totals": {
+      "records": 0,
+      "tasks": 0,
+      "touches": 0,
+      "responses": 0,
+      "noResponses": 0,
+      "assessmentRequests": 0,
+      "assessmentCompletions": 0,
+      "discoveryAsks": 0,
+      "discoveryReady": 0
     },
-    "byCadenceName": [],
+    "byCadence": {
+      "relationship_building_v1": 0
+    },
+    "byStage": {
+      "connection_request": 0
+    },
+    "tasksByCadenceStageTaskType": [
+      {
+        "cadenceName": "RELATIONSHIP_BUILDING_V1",
+        "cadenceStage": "INTRO_MESSAGE",
+        "taskType": "INTRO_MESSAGE",
+        "count": 0
+      }
+    ],
+    "byChannel": {
+      "linkedin": 0
+    },
+    "byTouchStatus": {
+      "sent": 0
+    },
+    "conversionSummary": [
+      {
+        "key": "connection_request_to_intro_message",
+        "fromStage": "CONNECTION_REQUEST",
+        "toStages": ["INTRO_MESSAGE"],
+        "fromCount": 0,
+        "toCount": 0,
+        "conversionRate": null,
+        "confidence": "low",
+        "basis": "current_crm_stage_snapshot",
+        "approximate": true,
+        "warnings": []
+      }
+    ],
+    "status": "ok",
+    "isPartial": false,
+    "partialReason": null,
+    "retryAfterSeconds": null,
+    "diagnostics": {},
     "warnings": []
   }
 }
 ```
+
+Supported filters:
+
+- `ownerScope=mine|all`
+- `assigneeScope=mine|all`
+- `startDate`
+- `endDate`
+- `cadenceName`
+- `includeDiagnostics=true|false`
+
+Conversion confidence:
+
+- `high`: explicit old/new cadence-stage transition events exist.
+- `medium`: deterministic CRM fields such as `discoveryReadiness` support the
+  conversion, but complete transition history is unavailable.
+- `low`: conversion is estimated from current CRM stage distribution only.
+
+For `medium` and `low` confidence rows, `conversionRate` is a current-state
+share using `toCount / (fromCount + toCount)`, not a historical transition
+rate.
 
 ### GET /api/reporting/operations
 
@@ -505,14 +575,15 @@ queue snapshots are required yet.
 
 ### Phase 2: Valuable
 
-Rep Performance is now implemented as a read-only current-state plus recent
-activity report. Remaining Phase 2 work adds trend and conversion reporting
-after the current-state dashboard is stable:
+Rep Performance and Cadence Analytics are now implemented as read-only
+current-state plus recent-activity reports. Remaining valuable work adds trend
+and cohort reporting after the current-state dashboard is stable:
 
 1. Persist daily queue snapshots for queue growth and velocity.
 2. Add weekly/monthly rep breakdowns.
-3. Add cadence conversion reporting from structured `outbound_events`.
-4. Add assessment requested to assessment completed conversion.
+3. Add stronger cadence conversion reporting after all cadence events persist
+   explicit old/new stage transitions.
+4. Add assessment requested to assessment completed cohort conversion.
 5. Add owner and source trend comparisons.
 
 Phase 2 likely needs a persisted `reporting_snapshots` or
@@ -568,8 +639,8 @@ AI guardrails:
    plus recent event-time attribution where available.
 5. Implement `GET /api/reporting/operations` using `crm_sync_logs`,
    `outbound_events`, and `assessment_submissions`. Completed in Phase 3.
-6. Implement `GET /api/reporting/cadence-analytics` after cadence event payloads
-   are verified for stage/type consistency.
+6. Implement `GET /api/reporting/cadence-analytics` with conservative
+   confidence flags for approximate conversion metrics. Completed in Phase 4.
 7. Wire the workspace reporting page to Phase 1 endpoints.
 8. Add persisted queue/reporting snapshots only when Phase 1 dashboard usage
    proves trend reporting is needed.
