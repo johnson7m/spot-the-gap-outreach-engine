@@ -9,7 +9,7 @@ const queueReadCache = new Map();
 export function createTwentyQueueDataSource({ config = {}, queueRead = {}, log, restClient } = {}) {
   const client = restClient ?? (config.apiKey ? createTwentyRestClient(config) : null);
   const retryOptions = normalizeRetryOptions(queueRead);
-  const cacheOptions = normalizeCacheOptions(queueRead);
+  const baseCacheOptions = normalizeCacheOptions(queueRead);
 
   return {
     provider: 'twenty',
@@ -22,6 +22,7 @@ export function createTwentyQueueDataSource({ config = {}, queueRead = {}, log, 
       const fetchLimit = Math.min(Math.max(Number(limit) || DEFAULT_FETCH_LIMIT, 1), MAX_FETCH_LIMIT);
       const fetchOffset = Math.max(Number(offset) || 0, 0);
       const criticalObjects = getCriticalQueueObjects(query);
+      const cacheOptions = getCacheOptionsForQuery(baseCacheOptions, query);
       const cacheKey = buildQueueCacheKey({
         mode: 'page',
         limit: fetchLimit,
@@ -63,6 +64,7 @@ export function createTwentyQueueDataSource({ config = {}, queueRead = {}, log, 
       const fetchPageSize = Math.min(Math.max(Number(pageSize) || 100, 1), MAX_FETCH_LIMIT);
       const fetchMaxPages = Math.max(Number(maxPages) || 10, 1);
       const criticalObjects = getCriticalQueueObjects(query);
+      const cacheOptions = getCacheOptionsForQuery(baseCacheOptions, query);
       const cacheKey = buildQueueCacheKey({
         mode: 'all',
         pageSize: fetchPageSize,
@@ -280,6 +282,11 @@ function finalizeQueueRead({ objectResults, criticalObjects, cacheKey, cacheOpti
     objectResults,
     criticalObjects
   });
+  readStatus.cache = buildQueueCacheDiagnostics({
+    cacheKey,
+    cacheOptions,
+    status: cacheOptions.bypass ? 'bypassed' : 'miss'
+  });
   const records = buildQueueRecordsFromObjectResults({
     objectResults,
     warnings: buildObjectWarnings(objectResults),
@@ -396,7 +403,10 @@ function buildStaleCacheRecords({ cached, readStatus, cacheOptions }) {
       partialReason: 'twenty_rate_limited',
       staleCacheGuidance: 'Showing recently cached queue data because Twenty is rate-limited. Refresh shortly.',
       cache: {
+        status: 'hit',
+        cacheKey: cached.cacheKey ?? null,
         cachedAt: new Date(cached.cachedAt).toISOString(),
+        cacheGeneratedAt: new Date(cached.cachedAt).toISOString(),
         ageSeconds,
         ttlSeconds: cacheOptions.ttlSeconds
       }
@@ -441,18 +451,19 @@ function getCriticalQueueObjects(query = {}) {
 }
 
 function writeQueueCache(cacheKey, records, cacheOptions) {
-  if (!cacheOptions.enabled) {
+  if (!cacheOptions.enabled || cacheOptions.bypass) {
     return;
   }
 
   queueReadCache.set(cacheKey, {
     cachedAt: Date.now(),
+    cacheKey,
     records
   });
 }
 
 function readQueueCache(cacheKey, cacheOptions) {
-  if (!cacheOptions.enabled) {
+  if (!cacheOptions.enabled || cacheOptions.bypass) {
     return null;
   }
 
@@ -472,6 +483,18 @@ function readQueueCache(cacheKey, cacheOptions) {
 
 function buildQueueCacheKey(parts) {
   return JSON.stringify(parts);
+}
+
+function buildQueueCacheDiagnostics({ cacheKey, cacheOptions, status = 'miss' } = {}) {
+  return {
+    status: cacheOptions.enabled ? status : 'disabled',
+    cacheKey: cacheKey ?? null,
+    cacheGeneratedAt: null,
+    cachedAt: null,
+    ageSeconds: null,
+    ttlSeconds: cacheOptions.ttlSeconds,
+    bypass: Boolean(cacheOptions.bypass)
+  };
 }
 
 function buildMissingCredentialsRecords({ pageSize, maxPages }) {
@@ -566,7 +589,15 @@ function normalizeRetryOptions(queueRead = {}) {
 function normalizeCacheOptions(queueRead = {}) {
   return {
     enabled: Boolean(queueRead.cacheEnabled),
-    ttlSeconds: normalizePositiveInt(queueRead.cacheTtlSeconds, 90)
+    ttlSeconds: normalizePositiveInt(queueRead.cacheTtlSeconds, 90),
+    bypass: false
+  };
+}
+
+function getCacheOptionsForQuery(cacheOptions = {}, query = {}) {
+  return {
+    ...cacheOptions,
+    bypass: normalizeBoolean(query.bypassCache ?? process.env.BYPASS_QUEUE_CACHE)
   };
 }
 
@@ -582,6 +613,14 @@ function normalizeNonNegativeInt(value, fallback) {
 
 function firstNumber(...values) {
   return values.find((value) => typeof value === 'number' && Number.isFinite(value)) ?? null;
+}
+
+function normalizeBoolean(value) {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  return ['1', 'true', 'yes', 'on'].includes(String(value ?? '').toLowerCase());
 }
 
 function sleep(ms) {

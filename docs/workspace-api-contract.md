@@ -519,6 +519,10 @@ Supported query params:
   all People with review warnings, including records whose final queue is Fresh
   Leads, Follow-Ups, Warm Assessments, or Stale Recovery. The default endpoint
   and tab count return only final Pipeline Review records.
+- `bypassCache`: default `false`; diagnostics-only escape hatch for queue reads.
+  When `true`, the engine skips the short-lived source-read cache and will
+  return a degraded/rate-limited response instead of a stale cached snapshot if
+  Twenty critical reads fail.
 - `status`: optional Task status filter for `unassigned-tasks`.
 
 Response:
@@ -728,6 +732,10 @@ People coverage fields:
   Review warning during classification.
 - `diagnostics.finalPipelineReviewCount`: People whose final queue/disposition
   is Pipeline Review after precedence is applied.
+- `diagnostics.queueReadStatus.cache`: queue source-read cache diagnostics,
+  including `status`, `cacheKey`, `cacheGeneratedAt`, `ttlSeconds`, and
+  `bypass` when available. The cache stores raw successful Twenty reads for
+  short-lived rate-limit recovery; it does not cache rendered queue counts.
 
 Run `npm run queues:coverage-audit` for the full per-Person report. The audit
 writes `data/queue-coverage-audit.json` and

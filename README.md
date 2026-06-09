@@ -542,6 +542,10 @@ Pipeline Review endpoint semantics:
 - `GET /api/queues/summary` exposes `diagnostics.reviewedPeopleCount` and
   `diagnostics.finalPipelineReviewCount` so we can distinguish "reviewed by
   Pipeline Review rules" from "final Pipeline Review tab count."
+- `npm run queues:compare-pipeline-review-counts` compares coverage audit,
+  summary, and endpoint counts against the same read-only Twenty snapshot.
+  Use `BYPASS_QUEUE_CACHE=true` to skip the short-lived queue source cache while
+  diagnosing count mismatches.
 
 Fresh vs Follow-Up classification:
 

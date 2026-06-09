@@ -11,7 +11,10 @@ import {
   buildQueueCoverageAudit
 } from '../src/services/queueService.js';
 import { processAssessmentSubmission } from '../src/workflows/assessmentWorkflow.js';
-import { getOutboundQueueWorkflow } from '../src/workflows/outbound/getQueueWorkflow.js';
+import {
+  getOutboundQueueSummaryWorkflow,
+  getOutboundQueueWorkflow
+} from '../src/workflows/outbound/getQueueWorkflow.js';
 import { buildMissingNextTaskPlans } from '../src/workflows/outbound/missingNextTaskPlanner.js';
 import { buildManualLeadNormalizationPlans } from '../src/workflows/outbound/manualLeadNormalizationPlanner.js';
 import { buildSentInitialFollowUpPlans } from '../src/workflows/outbound/sentInitialFollowUpPlanner.js';
@@ -1335,6 +1338,52 @@ describe('outbound queue workflow', () => {
     expect(queue.totalCount).toBe(1);
   });
 
+  it('keeps summary Pipeline Review count aligned with endpoint totalCount for ownerScope=all', async () => {
+    const { people, tasks } = pipelineReviewPrecedenceFixture();
+    const dataSource = fakeQueueDataSource({ people, tasks });
+    const query = {
+      ownerScope: 'all'
+    };
+    const queue = await getOutboundQueueWorkflow({
+      queueSlug: 'pipeline-review',
+      query,
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource,
+      now: new Date('2026-06-08T15:00:00.000Z')
+    });
+    const summary = await getOutboundQueueSummaryWorkflow({
+      query,
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource,
+      now: new Date('2026-06-08T15:00:00.000Z')
+    });
+
+    expect(summary.counts.pipelineReview).toBe(queue.totalCount);
+    expect(summary.counts.pipelineReview).toBe(1);
+  });
+
+  it('does not filter Pipeline Review by dueStatus when dueStatus is unset', async () => {
+    const { people, tasks } = pipelineReviewPrecedenceFixture();
+    const result = await getOutboundQueueWorkflow({
+      queueSlug: 'pipeline-review',
+      query: {
+        ownerScope: 'all'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({ people, tasks }),
+      now: new Date('2026-06-08T15:00:00.000Z')
+    });
+
+    expect(result.totalCount).toBe(1);
+    expect(result.items[0]).toMatchObject({
+      personId: 'people-final-pipeline-review',
+      dueStatus: 'none'
+    });
+  });
+
   it('hides obvious test records by default and includes them only when requested', async () => {
     const testPerson = {
       ...queuePeople()[0],
@@ -1667,7 +1716,36 @@ describe('outbound queue workflow', () => {
     });
     expect(stale.count).toBeGreaterThan(0);
     expect(stale.diagnostics.queueReadStatus.cache).toMatchObject({
+      status: 'hit',
       ttlSeconds: 90
+    });
+
+    restClient.failures.people = httpError(429, 'People rate limited', { retryAfter: 5 });
+
+    const bypassed = await getOutboundQueueWorkflow({
+      queueSlug: 'fresh-leads',
+      query: {
+        ownerScope: 'all',
+        bypassCache: 'true'
+      },
+      config: {
+        ...baseConfig,
+        queueRead
+      },
+      workspaceUser: adminUser,
+      dataSource,
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+
+    expect(bypassed).toMatchObject({
+      status: 'degraded_rate_limited',
+      isPartial: true,
+      partialReason: 'twenty_rate_limited',
+      count: null
+    });
+    expect(bypassed.diagnostics.queueReadStatus.cache).toMatchObject({
+      status: 'bypassed',
+      bypass: true
     });
 
     clearTwentyQueueReadCache();

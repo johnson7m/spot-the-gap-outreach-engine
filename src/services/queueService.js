@@ -404,7 +404,8 @@ function buildQueueDiagnostics({
   now = new Date()
 } = {}) {
   const diagnostics = {
-    hiddenTestRecords
+    hiddenTestRecords,
+    normalizedDueBefore: query.dueBefore ? toDateOnly(query.dueBefore) : null
   };
 
   if (queueSlug !== 'pipeline-review') {
@@ -426,10 +427,23 @@ function buildQueueDiagnostics({
     now
   });
 
+  const finalPipelineReviewItems = selectQueueCandidates({
+    queueSlug: 'pipeline-review',
+    people,
+    tasks,
+    tasksByPersonId,
+    hiddenTestPersonIds,
+    query: {
+      ...query,
+      includeAllReviewed: false,
+      includeDiagnostics: false
+    },
+    warnings: [],
+    now
+  });
+
   diagnostics.reviewedPeopleCount = allReviewedItems.length;
-  diagnostics.finalPipelineReviewCount = allReviewedItems.filter(
-    (item) => item.queuePrecedenceApplied === 'pipeline-review' && !getTerminalDisposition(item)
-  ).length;
+  diagnostics.finalPipelineReviewCount = finalPipelineReviewItems.length;
 
   return diagnostics;
 }
@@ -729,6 +743,9 @@ export function normalizeQueueQuery(query = {}, workspaceUser = {}) {
         ? 'mine'
         : 'all';
   const status = normalizeSelect(query.status);
+  const dueStatus = normalizeSelect(query.dueStatus);
+  const bypassCache =
+    query.bypassCache === undefined ? false : normalizeBoolean(query.bypassCache);
 
   return {
     limit,
@@ -745,7 +762,9 @@ export function normalizeQueueQuery(query = {}, workspaceUser = {}) {
     requestedOwnerScope: requestedOwnerScope ? requestedOwnerScope.toLowerCase() : null,
     assigneeScope,
     requestedAssigneeScope: requestedAssigneeScope ? requestedAssigneeScope.toLowerCase() : null,
-    status: status || null
+    status: status || null,
+    dueStatus: dueStatus ? dueStatus.toLowerCase() : null,
+    bypassCache
   };
 }
 
@@ -894,49 +913,106 @@ function selectQueueCandidates({
         }));
 
     case 'pipeline-review':
-      return people
-        .map((person) => {
-          const openTask = firstOpenTask(tasksByPersonId.get(person.personId));
-          const personTasks = tasksByPersonId.get(person.personId) ?? [];
-          const review = getPipelineReview(person, openTask, personTasks);
+      {
+        const currentFinalQueueByPersonId = buildCurrentFinalQueueByPersonId({
+          people,
+          tasks,
+          tasksByPersonId,
+          hiddenTestPersonIds,
+          query,
+          now
+        });
 
-          return {
-            person,
-            openTask,
-            personTasks,
-            reviewWarnings: review.warnings,
-            reviewReasons: review.reasons,
-            suggestedResolutionActions: review.suggestedResolutionActions
-          };
-        })
-        .filter(({ reviewWarnings }) => reviewWarnings.length > 0)
-        .map(({ person, openTask, personTasks, reviewWarnings, reviewReasons, suggestedResolutionActions }) => ({
-          person,
-          item: toClassifiedQueueItem({
-            person,
-            task: openTask,
-            tasks: personTasks,
-            source: 'twenty:person',
-            itemWarnings: reviewWarnings,
-            reviewReasons,
-            suggestedResolutionActions,
-            queueClassification: getPipelineReviewClassification(reviewReasons),
-            queueClassificationReasons: reviewReasons,
-            queueSlug,
-            query,
-            now
+        return people
+          .map((person) => {
+            const openTask = firstOpenTask(tasksByPersonId.get(person.personId));
+            const personTasks = tasksByPersonId.get(person.personId) ?? [];
+            const review = getPipelineReview(person, openTask, personTasks);
+
+            return {
+              person,
+              openTask,
+              personTasks,
+              reviewWarnings: review.warnings,
+              reviewReasons: review.reasons,
+              suggestedResolutionActions: review.suggestedResolutionActions
+            };
           })
-        }))
-        .filter(({ person, item }) =>
-          query.includeAllReviewed || query.includeDiagnostics
-            ? true
-            : !getTerminalDisposition(person) && item.queuePrecedenceApplied === 'pipeline-review'
-        )
-        .map(({ item }) => item);
+          .filter(({ reviewWarnings }) => reviewWarnings.length > 0)
+          .map(({ person, openTask, personTasks, reviewWarnings, reviewReasons, suggestedResolutionActions }) => ({
+            person,
+            item: toClassifiedQueueItem({
+              person,
+              task: openTask,
+              tasks: personTasks,
+              source: 'twenty:person',
+              itemWarnings: reviewWarnings,
+              reviewReasons,
+              suggestedResolutionActions,
+              queueClassification: getPipelineReviewClassification(reviewReasons),
+              queueClassificationReasons: reviewReasons,
+              queueSlug,
+              query,
+              now
+            })
+          }))
+          .filter(({ person }) =>
+            query.includeAllReviewed || query.includeDiagnostics
+              ? true
+              : currentFinalQueueByPersonId.get(person.personId) === 'pipeline-review'
+          )
+          .map(({ item }) => item);
+      }
 
     default:
       return [];
   }
+}
+
+function buildCurrentFinalQueueByPersonId({
+  people = [],
+  tasks = [],
+  tasksByPersonId = new Map(),
+  hiddenTestPersonIds = new Set(),
+  query = {},
+  now = new Date()
+} = {}) {
+  const finalQueueByPersonId = new Map();
+
+  for (const queueSlug of ['stale-recovery', 'warm-assessments', 'follow-ups', 'fresh-leads']) {
+    const items = selectQueueCandidates({
+      queueSlug,
+      people,
+      tasks,
+      tasksByPersonId,
+      hiddenTestPersonIds,
+      query,
+      warnings: [],
+      now
+    });
+
+    for (const item of items) {
+      if (item.personId && !finalQueueByPersonId.has(item.personId)) {
+        finalQueueByPersonId.set(item.personId, queueSlug);
+      }
+    }
+  }
+
+  for (const person of people) {
+    if (finalQueueByPersonId.has(person.personId) || getTerminalDisposition(person)) {
+      continue;
+    }
+
+    const openTask = firstOpenTask(tasksByPersonId.get(person.personId));
+    const personTasks = tasksByPersonId.get(person.personId) ?? [];
+    const review = getPipelineReview(person, openTask, personTasks);
+
+    if (review.warnings.length > 0) {
+      finalQueueByPersonId.set(person.personId, 'pipeline-review');
+    }
+  }
+
+  return finalQueueByPersonId;
 }
 
 function normalizePersonRecord({

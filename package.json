@@ -28,6 +28,7 @@
     "queues:inspect-person": "node scripts/inspectPersonQueueContext.js",
     "queues:diagnose-classification": "node scripts/diagnoseQueueClassification.js",
     "queues:coverage-audit": "node scripts/queueCoverageAudit.js",
+    "queues:compare-pipeline-review-counts": "node scripts/comparePipelineReviewCounts.js",
     "queues:plan-missing-next-tasks": "node scripts/planMissingNextTasks.js",
     "queues:plan-sent-initial-follow-ups": "node scripts/planSentInitialFollowUps.js",
     "queues:plan-manual-lead-normalization": "node scripts/planManualLeadNormalization.js",
