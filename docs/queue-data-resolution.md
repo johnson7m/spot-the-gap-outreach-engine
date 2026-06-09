@@ -565,8 +565,28 @@ Live apply rules:
 - Verifies both the Task and Person taskTarget after creation.
 - Writes `crm_sync_logs` and `outbound_events` with
   `event_type=missing_next_task_created`.
+- Paces live writes with `MISSING_NEXT_TASK_WRITE_DELAY_MS`, default `1500`.
+- Retries Twenty 429 responses when `MISSING_NEXT_TASK_RETRY_AFTER_429=true`;
+  it respects `retry-after` and otherwise waits
+  `MISSING_NEXT_TASK_429_FALLBACK_DELAY_MS`, default `60000`.
+- Writes latest apply output to `data/missing-next-task-apply-latest.json`.
+- Returns `partial_success` when some records verify and others fail.
 - Does not patch People, change cadence stages, reopen Tasks, or alter
   assessment webhook behavior.
+
+Recovery for a partially successful missing next-task apply:
+
+```bash
+npm run queues:recover-missing-next-tasks
+```
+
+The recovery script reads the latest apply output, selects failed,
+verification-failed, and repeated-failure-skipped operations, rechecks dedupe
+keys and `taskTargets`, and writes only missing recovery operations when live
+guards are enabled. If `data/missing-next-task-apply-latest.json` is missing,
+recovery attempts to reconstruct failed operations from Supabase
+`crm_sync_logs` and `outbound_events`; if neither source exists, it exits with
+an actionable missing-output response instead of throwing `ENOENT`.
 
 ## Legacy Task Target Apply
 

@@ -336,6 +336,12 @@ Live missing next-task creation requires an explicit batch:
 MISSING_NEXT_TASK_APPLY_ENABLED=true LIVE_TEST=true MISSING_NEXT_TASK_APPLY_MODE=next_eligible MISSING_NEXT_TASK_BATCH_SIZE=5 npm run queues:apply-missing-next-tasks
 ```
 
+Recover retryable missing next-task failures from the latest apply output:
+
+```bash
+npm run queues:recover-missing-next-tasks
+```
+
 Dry-run sent-initial follow-up apply:
 
 ```bash
@@ -409,6 +415,17 @@ Apply rules:
 - creates `POST /rest/taskTargets` Person links after Task creation
 - optionally links Company only with `MISSING_NEXT_TASK_LINK_COMPANY=true`
 - verifies the Task and Person taskTarget after creation
+- waits `MISSING_NEXT_TASK_WRITE_DELAY_MS` between live operations by default
+- retries Twenty 429 responses when `MISSING_NEXT_TASK_RETRY_AFTER_429=true`,
+  respecting `retry-after` when present and otherwise using
+  `MISSING_NEXT_TASK_429_FALLBACK_DELAY_MS`
+- writes the latest apply output to `data/missing-next-task-apply-latest.json`
+- recovery rechecks the dedupe key and existing `taskTargets` before writing,
+  so partially successful operations can be resumed without duplicate Tasks
+- if the latest apply output file is missing, recovery falls back to Supabase
+  `crm_sync_logs` and `outbound_events` for
+  `missing_next_task_create` / `missing_next_task_created` before failing with
+  an actionable message
 - writes `crm_sync_logs` and `outbound_events` with
   `event_type=missing_next_task_created`
 - does not update People, change cadence stage, or alter assessment webhook

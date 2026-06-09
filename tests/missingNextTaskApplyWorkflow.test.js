@@ -1,3 +1,6 @@
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import sampleAssessment from '../data/sample-netlify-assessment-submission.json' with { type: 'json' };
 import {
@@ -8,11 +11,18 @@ import { processAssessmentSubmission } from '../src/workflows/assessmentWorkflow
 import {
   applyMissingNextTaskPlan,
   buildMissingNextTaskOperation,
+  buildMissingNextTaskRecoveryPlan,
   buildMissingNextTaskPayload,
   selectCurrentlyEligibleMissingNextTaskCandidateBatch,
   selectMissingNextTaskCandidateBatch,
   selectMissingNextTaskCandidates
 } from '../src/workflows/outbound/applyMissingNextTasksWorkflow.js';
+import {
+  buildMissingNextTaskApplyOutputFromLogs,
+  buildMissingNextTaskApplyOutput,
+  loadMissingNextTaskApplyOutput,
+  writeMissingNextTaskOutputFile
+} from '../src/workflows/outbound/missingNextTaskApplyOutput.js';
 
 const silentLog = {
   info() {},
@@ -496,6 +506,331 @@ describe('missing next-task apply workflow', () => {
     });
   });
 
+  it('retries Twenty 429 errors before marking an operation failed', async () => {
+    const restClient = fakeTaskClient({
+      createFailures: {
+        tasks: [httpError(429, 'Limit reached', { retryAfter: 2 })]
+      }
+    });
+    const sleepCalls = [];
+    const result = await applyMissingNextTaskPlan({
+      plan: fakeMissingNextTaskPlan({
+        plans: [safePlanRecord('person-safe-1')]
+      }),
+      config: baseConfig(),
+      restClient,
+      operationalStore: fakeOperationalStore(),
+      options: {
+        applyEnabled: true,
+        liveTest: true,
+        batchSize: 1,
+        offset: 0,
+        writeDelayMs: 0,
+        retryAfter429: true,
+        maxRetryAttempts: 2,
+        retryFallbackMs: 60000
+      },
+      sleep: async (ms) => {
+        sleepCalls.push(ms);
+      }
+    });
+
+    expect(sleepCalls).toEqual([2000]);
+    expect(result).toMatchObject({
+      status: 'succeeded',
+      retryAfterSeconds: 2,
+      summary: {
+        attempted: 1,
+        succeeded: 1
+      }
+    });
+    expect(result.operations[0]).toMatchObject({
+      status: 'verification_succeeded',
+      retryAttempts: 1,
+      retryAfterSeconds: 2
+    });
+    expect(restClient.created.filter((entry) => entry.objectPlural === 'tasks')).toHaveLength(1);
+  });
+
+  it('returns partial_success and recovery guidance when some operations fail', async () => {
+    const restClient = fakeTaskClient({
+      createFailures: {
+        tasks: [null, httpError(429, 'Limit reached')]
+      }
+    });
+    const result = await applyMissingNextTaskPlan({
+      plan: fakeMissingNextTaskPlan({
+        plans: [safePlanRecord('person-safe-1'), safePlanRecord('person-safe-2')]
+      }),
+      config: baseConfig(),
+      restClient,
+      operationalStore: fakeOperationalStore(),
+      options: {
+        applyEnabled: true,
+        liveTest: true,
+        batchSize: 2,
+        offset: 0,
+        writeDelayMs: 0,
+        retryAfter429: false,
+        maxRetryAttempts: 0,
+        retryFallbackMs: 3000
+      },
+      sleep: async () => {}
+    });
+
+    expect(result).toMatchObject({
+      status: 'partial_success',
+      retryAfterSeconds: 3,
+      summary: {
+        attempted: 2,
+        succeeded: 1,
+        failed: 1
+      },
+      recommendedNextCommand:
+        'MISSING_NEXT_TASK_APPLY_ENABLED=true LIVE_TEST=true npm run queues:recover-missing-next-tasks'
+    });
+  });
+
+  it.each(['succeeded', 'partial_success', 'failed'])(
+    'writes %s apply output with summary, operations, audit IDs, timestamp, and correlation ID',
+    async (status) => {
+      const tempDir = await mkdtemp(join(tmpdir(), 'missing-next-output-'));
+      const outputPath = join(tempDir, 'nested', 'apply-latest.json');
+      const failed = status === 'failed';
+      const output = buildMissingNextTaskApplyOutput({
+        result: {
+          status,
+          dryRun: false,
+          liveEnabled: true,
+          guard: {},
+          summary: {
+            attempted: 1,
+            succeeded: failed ? 0 : 1,
+            failed: failed ? 1 : 0,
+            verificationFailed: 0,
+            skipped: 0,
+            auditIds: ['audit-output-1'],
+            outboundEventIds: ['event-output-1']
+          },
+          retryAfterSeconds: failed ? 60 : null,
+          recommendedNextCommand: 'npm run queues:recover-missing-next-tasks',
+          warnings: [],
+          operations: [
+            {
+              correlationId: 'operation-correlation-1',
+              personId: 'person-safe-1',
+              status: failed ? 'failed' : 'verification_succeeded',
+              audit: {
+                id: 'audit-output-1'
+              },
+              outboundEvent: {
+                id: 'event-output-1'
+              }
+            }
+          ]
+        },
+        generatedAt: new Date('2026-06-08T18:00:00.000Z'),
+        correlationId: 'batch-correlation-1'
+      });
+
+      try {
+        await writeMissingNextTaskOutputFile(outputPath, output);
+        const written = JSON.parse(await readFile(outputPath, 'utf8'));
+
+        expect(written).toMatchObject({
+          status,
+          timestamp: '2026-06-08T18:00:00.000Z',
+          correlationId: 'batch-correlation-1',
+          operationCorrelationIds: ['operation-correlation-1'],
+          summary: {
+            auditIds: ['audit-output-1'],
+            outboundEventIds: ['event-output-1']
+          },
+          operations: [
+            {
+              personId: 'person-safe-1',
+              auditId: 'audit-output-1',
+              outboundEventId: 'event-output-1'
+            }
+          ]
+        });
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    }
+  );
+
+  it('recovers a failed operation without duplicating an existing deduped task', async () => {
+    const operation = buildMissingNextTaskOperation({
+      record: safePlanRecord('person-safe-1'),
+      now: new Date('2026-06-05T15:00:00.000Z')
+    });
+    const recoveryPlan = buildMissingNextTaskRecoveryPlan({
+      plan: fakeMissingNextTaskPlan({
+        plans: [safePlanRecord('person-safe-1')]
+      }),
+      applyOutput: {
+        status: 'partial_success',
+        operations: [
+          {
+            personId: 'person-safe-1',
+            status: 'failed',
+            dedupeKey: operation.dedupeKey
+          }
+        ]
+      }
+    });
+    const restClient = fakeTaskClient({
+      tasks: [
+        {
+          id: 'task-existing-dedupe',
+          title: 'Send relationship-oriented connection request',
+          status: 'TODO',
+          bodyV2: {
+            markdown: `Dedupe key: ${operation.dedupeKey}`
+          }
+        }
+      ]
+    });
+    const result = await applyMissingNextTaskPlan({
+      plan: recoveryPlan,
+      config: baseConfig(),
+      restClient,
+      operationalStore: fakeOperationalStore(),
+      options: {
+        applyEnabled: true,
+        liveTest: true,
+        batchSize: 1,
+        offset: 0,
+        writeDelayMs: 0
+      },
+      now: new Date('2026-06-05T15:00:00.000Z')
+    });
+
+    expect(result.operations[0]).toMatchObject({
+      status: 'verification_succeeded',
+      duplicateTaskSkipped: true,
+      task: {
+        id: 'task-existing-dedupe'
+      },
+      personTarget: {
+        targetPersonId: 'person-safe-1'
+      }
+    });
+    expect(restClient.created).toEqual([
+      {
+        objectPlural: 'taskTargets',
+        payload: {
+          taskId: 'task-existing-dedupe',
+          targetPersonId: 'person-safe-1'
+        }
+      }
+    ]);
+  });
+
+  it('handles a missing apply output file with an actionable recovery response', async () => {
+    const loaded = await loadMissingNextTaskApplyOutput({
+      applyOutputPath: '/tmp/visible-gap-missing-next-task-output.json',
+      config: {
+        supabase: {
+          enabled: false
+        }
+      },
+      fallbackLoader: async () => null,
+      now: new Date('2026-06-08T18:00:00.000Z')
+    });
+
+    expect(loaded).toMatchObject({
+      source: 'missing',
+      missingFile: true,
+      output: {
+        ok: false,
+        status: 'missing_apply_output',
+        operations: [],
+        recommendedNextCommand:
+          'Re-run the apply command in dry-run mode or inspect Supabase crm_sync_logs for action=missing_next_task_create before recovery.'
+      }
+    });
+    expect(loaded.warnings[0]).toContain('Apply output file was not found');
+  });
+
+  it('can reconstruct recovery input from Supabase-style CRM and outbound logs', () => {
+    const fallbackOutput = buildMissingNextTaskApplyOutputFromLogs({
+      crmSyncLogs: [
+        {
+          id: 'audit-fallback-1',
+          correlation_id: 'missing-next-task:person-safe-1:abc',
+          action: 'missing_next_task_create',
+          dedupe_key:
+            'outbound-cadence:person:person-safe-1:cadence:RELATIONSHIP_BUILDING_V1:stage:CONNECTION_REQUEST:task:connection_request',
+          status: 'failed',
+          request_payload: {
+            taskPayload: {
+              title: 'Send relationship-oriented connection request',
+              dueAt: '2026-06-09'
+            },
+            personTarget: {
+              targetPersonId: 'person-safe-1'
+            }
+          },
+          error_payload: {
+            message: 'Limit reached',
+            retryAfterSeconds: 60
+          },
+          created_at: '2026-06-08T18:00:00.000Z'
+        }
+      ],
+      outboundEvents: [
+        {
+          id: 'event-fallback-1',
+          correlation_id: 'missing-next-task:person-safe-1:abc',
+          event_type: 'missing_next_task_created',
+          status: 'failed',
+          payload: {
+            personId: 'person-safe-1',
+            personName: 'Lead person-safe-1',
+            cadenceName: 'RELATIONSHIP_BUILDING_V1',
+            cadenceStage: 'CONNECTION_REQUEST',
+            latestTouchStatus: 'DRAFTED',
+            recommendedTaskTitle: 'Send relationship-oriented connection request',
+            recommendedDueDate: '2026-06-09',
+            recommendedTaskType: 'connection_request'
+          }
+        }
+      ],
+      generatedAt: new Date('2026-06-08T18:00:00.000Z'),
+      correlationId: 'fallback-source-1'
+    });
+    const recoveryPlan = buildMissingNextTaskRecoveryPlan({
+      plan: fakeMissingNextTaskPlan({
+        plans: [safePlanRecord('person-safe-1')]
+      }),
+      applyOutput: fallbackOutput
+    });
+
+    expect(fallbackOutput).toMatchObject({
+      source: 'supabase_logs',
+      status: 'failed',
+      retryAfterSeconds: 60,
+      operations: [
+        {
+          personId: 'person-safe-1',
+          status: 'failed',
+          auditId: 'audit-fallback-1',
+          outboundEventId: 'event-fallback-1'
+        }
+      ]
+    });
+    expect(recoveryPlan).toMatchObject({
+      recoverableOperationCount: 1,
+      plans: [
+        {
+          personId: 'person-safe-1'
+        }
+      ]
+    });
+  });
+
   it('marks verification_failed when the created taskTarget cannot be verified', async () => {
     const result = await applyMissingNextTaskPlan({
       plan: fakeMissingNextTaskPlan({
@@ -628,10 +963,11 @@ function safePlanRecord(personId, overrides = {}) {
   };
 }
 
-function fakeTaskClient({ tasks = [], taskTargets = [], persistTaskTargets = true } = {}) {
+function fakeTaskClient({ tasks = [], taskTargets = [], persistTaskTargets = true, createFailures = {} } = {}) {
   return {
     tasks: [...tasks],
     taskTargets: [...taskTargets],
+    createFailures,
     created: [],
     async listAllRecords(objectPlural) {
       if (objectPlural === 'tasks') {
@@ -658,6 +994,12 @@ function fakeTaskClient({ tasks = [], taskTargets = [], persistTaskTargets = tru
       return null;
     },
     async createRecord(objectPlural, payload) {
+      const failure = consumeFailure(this.createFailures, objectPlural);
+
+      if (failure) {
+        throw failure;
+      }
+
       this.created.push({
         objectPlural,
         payload
@@ -681,6 +1023,32 @@ function fakeTaskClient({ tasks = [], taskTargets = [], persistTaskTargets = tru
       return record;
     }
   };
+}
+
+function consumeFailure(failures, objectPlural) {
+  const failure = failures[objectPlural];
+
+  if (Array.isArray(failure)) {
+    return failure.shift() ?? null;
+  }
+
+  return failure ?? null;
+}
+
+function httpError(status, message, { retryAfter } = {}) {
+  const error = new Error(message);
+  error.response = {
+    status,
+    data: {
+      message
+    },
+    headers: retryAfter
+      ? {
+          'retry-after': String(retryAfter)
+        }
+      : {}
+  };
+  return error;
 }
 
 function fakeEmptyQueueRestClient() {

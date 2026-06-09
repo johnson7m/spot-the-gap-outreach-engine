@@ -973,6 +973,15 @@ Missing next-task operations:
   `taskTargets`, verifies the link, and records CRM audit plus outbound event
   rows. It re-checks due dates at apply time and refuses past-due generated
   Tasks unless `MISSING_NEXT_TASK_ALLOW_PAST_DUE=true`.
+- Missing next-task apply is paced with `MISSING_NEXT_TASK_WRITE_DELAY_MS` and
+  retries Twenty 429 responses when `MISSING_NEXT_TASK_RETRY_AFTER_429=true`.
+  Script output includes `retryAfterSeconds`, `status=partial_success` when
+  mixed results occur, and `nextRecommendedCommand`.
+- `npm run queues:recover-missing-next-tasks` is the recovery command for
+  partially successful missing-next-task batches. It reads
+  `data/missing-next-task-apply-latest.json`, rechecks dedupe keys and
+  `taskTargets`, and writes only missing recovery operations when live guards
+  are enabled.
 - Sent-initial apply creates only the post-initial follow-up Task, links it to
   the Person through `taskTargets`, and does not modify the old initial Task.
   Person `cadenceStage` updates remain disabled unless

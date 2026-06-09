@@ -35,6 +35,7 @@
     "queues:apply-manual-lead-normalization": "node scripts/applyManualLeadNormalization.js",
     "queues:apply-missing-next-tasks": "node scripts/applyMissingNextTasks.js",
     "queues:apply-sent-initial-follow-ups": "node scripts/applySentInitialFollowUps.js",
+    "queues:recover-missing-next-tasks": "node scripts/recoverMissingNextTasks.js",
     "queues:recover-sent-initial-follow-ups": "node scripts/recoverSentInitialFollowUps.js",
     "legacy:tasks:apply": "node scripts/applyLegacyTaskRetrofit.js",
     "legacy:owners:plan": "node scripts/planLegacyOwnerCleanup.js",

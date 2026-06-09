@@ -26,7 +26,8 @@ export async function applyMissingNextTaskPlan({
   restClient,
   operationalStore,
   log,
-  now = new Date()
+  now = new Date(),
+  sleep = defaultSleep
 } = {}) {
   const normalizedOptions = normalizeMissingNextTaskApplyOptions(options);
   const liveEnabled = Boolean(normalizedOptions.applyEnabled && normalizedOptions.liveTest);
@@ -134,7 +135,7 @@ export async function applyMissingNextTaskPlan({
   const results = [];
   let consecutiveFailures = 0;
 
-  for (const operation of operations) {
+  for (const [index, operation] of operations.entries()) {
     if (operation.status === 'skipped') {
       results.push(operation);
       continue;
@@ -147,6 +148,10 @@ export async function applyMissingNextTaskPlan({
         skippedReason: 'Stopped after repeated failures.'
       });
       continue;
+    }
+
+    if (index > 0 && normalizedOptions.writeDelayMs > 0) {
+      await sleep(normalizedOptions.writeDelayMs);
     }
 
     const startedAt = new Date().toISOString();
@@ -162,18 +167,22 @@ export async function applyMissingNextTaskPlan({
     });
 
     try {
-      const openTaskCheck = await findOpenTaskForPerson({
+      const operationResult = await executeMissingNextTaskOperationWithRetry({
         client,
-        personId: operation.personId
+        operation,
+        options: normalizedOptions,
+        sleep
       });
 
-      if (openTaskCheck) {
+      if (operationResult.skippedReason) {
         const audit = await store.appendCrmSyncLog({
           ...auditBase,
           status: 'skipped',
           responsePayload: {
-            skippedReason: 'Open Task already exists for Person.',
-            existingTask: summarizeTask(openTaskCheck)
+            skippedReason: operationResult.skippedReason,
+            existingTask: operationResult.existingTask,
+            retryAttempts: operationResult.retryAttempts,
+            retryAfterSeconds: operationResult.retryAfterSeconds
           },
           finishedAt: new Date().toISOString()
         });
@@ -182,8 +191,10 @@ export async function applyMissingNextTaskPlan({
           status: 'cancelled',
           payload: {
             ...eventBase.payload,
-            skippedReason: 'Open Task already exists for Person.',
-            existingTaskId: openTaskCheck.id
+            skippedReason: operationResult.skippedReason,
+            existingTaskId: operationResult.existingTask?.id ?? null,
+            retryAttempts: operationResult.retryAttempts,
+            retryAfterSeconds: operationResult.retryAfterSeconds
           }
         });
 
@@ -191,37 +202,18 @@ export async function applyMissingNextTaskPlan({
         results.push({
           ...operation,
           status: 'skipped',
-          skippedReason: 'Open Task already exists for Person.',
-          existingTask: summarizeTask(openTaskCheck),
+          skippedReason: operationResult.skippedReason,
+          existingTask: operationResult.existingTask,
+          retryAttempts: operationResult.retryAttempts,
+          retryAfterSeconds: operationResult.retryAfterSeconds,
           audit,
           outboundEvent
         });
         continue;
       }
 
-      const existingTask = await findExistingTaskByDedupeKey({
-        client,
-        dedupeKey: operation.dedupeKey
-      });
-      const task = existingTask ?? (await client.createRecord('tasks', operation.taskPayload));
-      const personTarget = await createPersonTaskTargetIfMissing({
-        client,
-        operation,
-        taskId: task.id
-      });
-      const companyTarget =
-        operation.companyId && operation.companyTargetEnabled
-          ? await createCompanyTaskTargetIfMissing({
-              client,
-              operation,
-              taskId: task.id
-            })
-          : null;
-      const verification = await verifyMissingNextTask({
-        client,
-        operation,
-        taskId: task.id
-      });
+      const { task, personTarget, companyTarget, duplicateTaskSkipped, verification, retryAttempts, retryAfterSeconds } =
+        operationResult;
       const succeeded = verification.ok;
       const finishedAt = new Date().toISOString();
       const audit = await store.appendCrmSyncLog({
@@ -231,8 +223,10 @@ export async function applyMissingNextTaskPlan({
           task,
           personTarget,
           companyTarget,
-          duplicateTaskSkipped: Boolean(existingTask),
-          verification
+          duplicateTaskSkipped,
+          verification,
+          retryAttempts,
+          retryAfterSeconds
         },
         errorPayload: succeeded ? null : verification,
         finishedAt
@@ -245,8 +239,10 @@ export async function applyMissingNextTaskPlan({
           taskId: task.id,
           personTaskTargetId: personTarget?.id ?? null,
           companyTaskTargetId: companyTarget?.id ?? null,
-          duplicateTaskSkipped: Boolean(existingTask),
-          verification
+          duplicateTaskSkipped,
+          verification,
+          retryAttempts,
+          retryAfterSeconds
         },
         errorPayload: succeeded ? null : verification
       });
@@ -258,14 +254,20 @@ export async function applyMissingNextTaskPlan({
         task,
         personTarget,
         companyTarget,
-        duplicateTaskSkipped: Boolean(existingTask),
+        duplicateTaskSkipped,
         verification,
+        retryAttempts,
+        retryAfterSeconds,
         audit,
         outboundEvent
       });
     } catch (error) {
       consecutiveFailures += 1;
-      const errorPayload = toErrorPayload(error);
+      const errorPayload = {
+        ...toErrorPayload(error),
+        retryAttempts: error.retryAttempts ?? 0,
+        retryAfterSeconds: error.retryAfterSeconds ?? getRetryAfterSeconds(error, normalizedOptions)
+      };
       const audit = await store.appendCrmSyncLog({
         ...auditBase,
         status: 'failed',
@@ -281,6 +283,8 @@ export async function applyMissingNextTaskPlan({
       results.push({
         ...operation,
         status: 'failed',
+        retryAttempts: errorPayload.retryAttempts,
+        retryAfterSeconds: errorPayload.retryAfterSeconds,
         error: errorPayload,
         audit,
         outboundEvent
@@ -295,11 +299,12 @@ export async function applyMissingNextTaskPlan({
   });
 
   return {
-    status: summary.failed > 0 || summary.verificationFailed > 0 ? 'failed' : 'succeeded',
+    status: determineMissingNextTaskStatus(summary),
     dryRun: false,
     liveEnabled: true,
     guard: buildGuardState(normalizedOptions),
     summary,
+    retryAfterSeconds: getMaxRetryAfterSeconds(results),
     recommendedNextCommand,
     nextRecommendedCommand: recommendedNextCommand,
     eligibleCount: selection.eligibleCount,
@@ -330,7 +335,11 @@ export function normalizeMissingNextTaskApplyOptions(options = {}) {
     allowPastDue: toBoolean(options.allowPastDue),
     batchSize: normalizePositiveInt(rawBatchSize, 5),
     batchSizeProvided,
-    offset: normalizeNonNegativeInt(options.offset, 0)
+    offset: normalizeNonNegativeInt(options.offset, 0),
+    writeDelayMs: normalizeNonNegativeInt(options.writeDelayMs, 1500),
+    retryAfter429: options.retryAfter429 === undefined ? true : toBoolean(options.retryAfter429),
+    maxRetryAttempts: normalizeNonNegativeInt(options.maxRetryAttempts, 2),
+    retryFallbackMs: normalizePositiveInt(options.retryFallbackMs, 60000)
   };
 }
 
@@ -444,6 +453,24 @@ export function isEligibleMissingNextTaskRecord(record = {}, options = {}) {
   return true;
 }
 
+export function buildMissingNextTaskRecoveryPlan({ plan = {}, applyOutput = {} } = {}) {
+  const sourcePlans = plan.plans ?? [];
+  const plansByPersonId = new Map(sourcePlans.map((record) => [String(record.personId), record]));
+  const recoverableOperations = (applyOutput.operations ?? []).filter(isRecoverableApplyOperation);
+  const plans = recoverableOperations
+    .map((operation) => plansByPersonId.get(String(operation.personId)) ?? operationToPlanRecord(operation))
+    .filter(Boolean);
+
+  return {
+    status: 'recovery_plan',
+    dryRun: true,
+    sourceApplyStatus: applyOutput.status ?? null,
+    sourceSummary: applyOutput.summary ?? null,
+    recoverableOperationCount: recoverableOperations.length,
+    plans
+  };
+}
+
 export function buildMissingNextTaskOperation({
   record,
   linkCompany = false,
@@ -506,6 +533,48 @@ export function buildMissingNextTaskOperation({
     personTargetPayload: null,
     companyTargetPayload: null,
     generatedAt: now.toISOString()
+  };
+}
+
+function isRecoverableApplyOperation(operation = {}) {
+  if (['failed', 'verification_failed'].includes(operation.status)) {
+    return true;
+  }
+
+  return operation.status === 'skipped' && /repeated failures/i.test(operation.skippedReason ?? '');
+}
+
+function operationToPlanRecord(operation = {}) {
+  if (!operation.personId) {
+    return null;
+  }
+
+  return {
+    personId: operation.personId,
+    personName: operation.personName ?? null,
+    owner: operation.taskPayload?.assigneeId
+      ? {
+          id: operation.taskPayload.assigneeId,
+          workspaceMemberId: operation.taskPayload.assigneeId
+        }
+      : null,
+    cadenceName: operation.cadenceName,
+    cadenceStage: operation.cadenceStage,
+    latestTouchChannel: operation.latestTouchChannel,
+    latestTouchStatus: operation.latestTouchStatus,
+    nextOutboundTouchDate: operation.nextOutboundTouchDate ?? null,
+    originalNextOutboundTouchDate: operation.originalNextOutboundTouchDate ?? null,
+    recommendedTaskTitle: operation.recommendedTaskTitle,
+    recommendedDueDate: operation.recommendedDueDate,
+    originalRecommendedDueDate: operation.originalRecommendedDueDate ?? null,
+    dueDateAdjusted: Boolean(operation.dueDateAdjusted),
+    dueDateAdjustmentReason: operation.dueDateAdjustmentReason ?? null,
+    recommendedTaskType: operation.recommendedTaskType,
+    safeToCreate: true,
+    isTestRecord: false,
+    testRecordReasons: [],
+    evidence: ['Recovered from latest missing next-task apply output.'],
+    warnings: []
   };
 }
 
@@ -631,6 +700,91 @@ async function verifyMissingNextTask({ client, operation, taskId }) {
     expectedTargetCompanyId: operation.companyTargetEnabled ? operation.companyId : null,
     actualTargetCompanyId: companyTarget?.targetCompanyId ?? null,
     taskTargetIds: taskTargets.map((target) => target.id).filter(Boolean)
+  };
+}
+
+async function executeMissingNextTaskOperationWithRetry({
+  client,
+  operation,
+  options,
+  sleep
+}) {
+  let attempt = 0;
+  let lastRetryAfterSeconds = null;
+
+  while (true) {
+    try {
+      const result = await executeMissingNextTaskOperation({
+        client,
+        operation
+      });
+
+      return {
+        ...result,
+        retryAttempts: attempt,
+        retryAfterSeconds: lastRetryAfterSeconds
+      };
+    } catch (error) {
+      if (!shouldRetryTwentyError(error, options) || attempt >= options.maxRetryAttempts) {
+        error.retryAttempts = attempt;
+        error.retryAfterSeconds = lastRetryAfterSeconds ?? getRetryAfterSeconds(error, options);
+        throw error;
+      }
+
+      attempt += 1;
+      const retryAfterSeconds = getRetryAfterSeconds(error, options);
+      lastRetryAfterSeconds = retryAfterSeconds;
+      await sleep(retryAfterSeconds * 1000);
+    }
+  }
+}
+
+async function executeMissingNextTaskOperation({ client, operation }) {
+  const existingTask = await findExistingTaskByDedupeKey({
+    client,
+    dedupeKey: operation.dedupeKey
+  });
+
+  if (!existingTask) {
+    const openTaskCheck = await findOpenTaskForPerson({
+      client,
+      personId: operation.personId
+    });
+
+    if (openTaskCheck) {
+      return {
+        skippedReason: 'Open Task already exists for Person.',
+        existingTask: summarizeTask(openTaskCheck)
+      };
+    }
+  }
+
+  const task = existingTask ?? (await client.createRecord('tasks', operation.taskPayload));
+  const personTarget = await createPersonTaskTargetIfMissing({
+    client,
+    operation,
+    taskId: task.id
+  });
+  const companyTarget =
+    operation.companyId && operation.companyTargetEnabled
+      ? await createCompanyTaskTargetIfMissing({
+          client,
+          operation,
+          taskId: task.id
+        })
+      : null;
+  const verification = await verifyMissingNextTask({
+    client,
+    operation,
+    taskId: task.id
+  });
+
+  return {
+    task,
+    personTarget,
+    companyTarget,
+    duplicateTaskSkipped: Boolean(existingTask),
+    verification
   };
 }
 
@@ -860,6 +1014,10 @@ function buildGuardState(options) {
     applyMode: options.applyMode,
     linkCompany: options.linkCompany,
     allowPastDue: options.allowPastDue,
+    writeDelayMs: options.writeDelayMs,
+    retryAfter429: options.retryAfter429,
+    maxRetryAttempts: options.maxRetryAttempts,
+    retryFallbackMs: options.retryFallbackMs,
     batchSize: options.batchSize,
     batchSizeProvided: options.batchSizeProvided,
     offset: options.offset
@@ -870,7 +1028,7 @@ function buildRecommendedNextCommand({ summary = {}, options = {} } = {}) {
   const failed = (summary.failed ?? 0) + (summary.verificationFailed ?? 0);
 
   if (failed > 0) {
-    return null;
+    return 'MISSING_NEXT_TASK_APPLY_ENABLED=true LIVE_TEST=true npm run queues:recover-missing-next-tasks';
   }
 
   if (options.applyMode === 'next_eligible') {
@@ -884,6 +1042,63 @@ function buildRecommendedNextCommand({ summary = {}, options = {} } = {}) {
   const nextOffset = (options.offset ?? 0) + (options.batchSize ?? 0);
 
   return `MISSING_NEXT_TASK_APPLY_ENABLED=true LIVE_TEST=true MISSING_NEXT_TASK_BATCH_SIZE=${options.batchSize ?? 10} MISSING_NEXT_TASK_OFFSET=${nextOffset} npm run queues:apply-missing-next-tasks`;
+}
+
+function determineMissingNextTaskStatus(summary = {}) {
+  const failed = (summary.failed ?? 0) + (summary.verificationFailed ?? 0);
+  const succeeded = summary.succeeded ?? 0;
+
+  if (failed > 0 && succeeded > 0) {
+    return 'partial_success';
+  }
+
+  if (failed > 0) {
+    return 'failed';
+  }
+
+  return 'succeeded';
+}
+
+function getMaxRetryAfterSeconds(results = []) {
+  const values = results
+    .map((result) => result.retryAfterSeconds ?? result.error?.retryAfterSeconds)
+    .filter((value) => Number.isFinite(Number(value)))
+    .map(Number);
+
+  return values.length > 0 ? Math.max(...values) : null;
+}
+
+function shouldRetryTwentyError(error, options = {}) {
+  const status = getHttpStatus(error);
+
+  if (status === 429 && options.retryAfter429) {
+    return true;
+  }
+
+  return [502, 503, 504].includes(status);
+}
+
+function getRetryAfterSeconds(error, options = {}) {
+  const headerValue =
+    error?.twentyDiagnostics?.headers?.['retry-after'] ??
+    error?.twentyDiagnostics?.headers?.['Retry-After'] ??
+    error?.response?.headers?.['retry-after'] ??
+    error?.response?.headers?.['Retry-After'];
+  const parsedHeader = Number(headerValue);
+
+  if (Number.isFinite(parsedHeader) && parsedHeader > 0) {
+    return parsedHeader;
+  }
+
+  return Math.max(1, Math.ceil((options.retryFallbackMs ?? 60000) / 1000));
+}
+
+function getHttpStatus(error) {
+  return Number(error?.twentyDiagnostics?.httpStatus ?? error?.response?.status ?? error?.httpStatus);
+}
+
+function defaultSleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function isExcludedRecordState(record = {}) {

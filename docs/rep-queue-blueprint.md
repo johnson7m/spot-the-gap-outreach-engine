@@ -242,6 +242,14 @@ Missing next-task planning:
   cadence fields.
 - Company taskTarget links remain optional behind
   `MISSING_NEXT_TASK_LINK_COMPANY=true`.
+- Missing next-task apply paces live writes with
+  `MISSING_NEXT_TASK_WRITE_DELAY_MS` and retries Twenty 429 responses before
+  marking an operation failed. Partial batches return `partial_success` with a
+  recommended recovery command.
+- `npm run queues:recover-missing-next-tasks` resumes failed or
+  verification-failed missing-next-task operations from the latest apply
+  output. It rechecks dedupe markers and existing `taskTargets` so it does not
+  duplicate Tasks.
 - `npm run queues:plan-sent-initial-follow-ups` handles initial-stage People
   where `latestTouchStatus=SENT` and no post-initial Task exists. It recommends
   `INTRO_MESSAGE` / `Send relationship follow-up / intro message` for
