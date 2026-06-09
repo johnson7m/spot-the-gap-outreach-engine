@@ -545,6 +545,11 @@ function coverageBaseRecord(person) {
   return {
     personId: person.personId,
     personName: person.name,
+    email: person.email ?? null,
+    linkedinUrl: person.linkedinUrl ?? null,
+    companyName: person.companyName ?? null,
+    targetCompanyId: person.targetCompanyId ?? null,
+    enrichmentStatus: person.enrichmentStatus ?? null,
     owner: person.owner
       ? {
           id: person.owner.id ?? null,

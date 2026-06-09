@@ -1236,31 +1236,77 @@ Response:
 
 ## Reporting Endpoints
 
-Reporting can start as one aggregate endpoint:
+Phase 1 reporting is read-only and reuses the queue classification/read model.
+Endpoints require Supabase workspace JWT auth and role `admin`, `operator`, or
+`rep`.
 
 ```text
-GET /api/reporting/summary?from=2026-05-01&to=2026-05-27
+GET /api/reporting/executive?ownerScope=all&includeDiagnostics=true
+GET /api/reporting/queue-health?ownerScope=all&includeDiagnostics=true
 ```
 
-Response:
+Common response envelope:
 
 ```json
 {
+  "ok": true,
+  "correlationId": "request-correlation-id",
   "data": {
-    "leadsCapturedThisWeek": 12,
-    "tasksDueToday": 8,
-    "overdueFollowUps": 3,
-    "assessmentCompletions": 5,
-    "quickCapturesByRep": [],
-    "touchesByChannel": [],
-    "staleLeads": 4,
-    "conversionBySource": []
-  }
+    "reportName": "executive",
+    "generatedAt": "2026-06-09T00:00:00.000Z",
+    "ownerScope": "all",
+    "assigneeScope": "all",
+    "metrics": {},
+    "status": "ok",
+    "isPartial": false,
+    "partialReason": null,
+    "retryAfterSeconds": null,
+    "diagnostics": {},
+    "warnings": []
+  },
+  "warnings": [],
+  "errors": []
 }
 ```
 
-Split reporting into smaller endpoints only after the UI proves which queries
-are used frequently.
+`GET /api/reporting/executive` returns:
+
+- `totalPeople`
+- `hiddenTestRecords`
+- `expectedRealPeople`
+- `activeLeads`
+- `freshLeads`
+- `followUps`
+- `warmAssessments`
+- `pipelineReview`
+- `staleRecovery`
+- `activeClients`
+- `unclassifiedPeople`
+- `totalOpenTasks`
+- `overdueTasks`
+
+`GET /api/reporting/queue-health` returns:
+
+- `queueCounts`
+- `overdueCountsByQueue`
+- `ownerMissing`
+- `emailMissing`
+- `companyMissing`
+- `linkedinMissing`
+- `enrichmentPartial`
+- `missingNextTask`
+- `unresolvedReviewItems`
+- `unassignedTasks`
+- `hiddenTestRecords`
+
+When critical Twenty reads are rate-limited or degraded, reporting mirrors the
+queue API degraded contract:
+
+- `data.status="degraded_rate_limited"` or `data.status="stale_cache"`
+- `data.isPartial=true`
+- `data.partialReason="twenty_rate_limited"` when applicable
+- `data.retryAfterSeconds` when available
+- `data.metrics=null` for degraded critical reads without a usable cache
 
 ## Open Contract Questions
 

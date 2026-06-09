@@ -121,6 +121,8 @@ GET /api/queues/stale-recovery
 GET /api/queues/pipeline-review
 GET /api/queues/unassigned-tasks
 GET /api/queues/summary
+GET /api/reporting/executive
+GET /api/reporting/queue-health
 ```
 
 Preview is dry-run only and is intended for the internal
@@ -607,6 +609,30 @@ Fresh vs Follow-Up classification:
 - Queue items include `queueClassification` and `queueClassificationReasons`.
   `includeDiagnostics=true` adds matched/excluded queue details.
 
+Read-only reporting endpoints:
+
+```text
+GET /api/reporting/executive
+GET /api/reporting/queue-health
+```
+
+These endpoints require Supabase workspace JWT auth and role `admin`,
+`operator`, or `rep`. They reuse the same Twenty queue source reads,
+rate-limit/degraded states, owner scoping, test-record detection, and queue
+classification rules as the queue endpoints. Phase 1 reports current-state
+metrics only and performs no CRM or Supabase writes.
+
+Diagnostic scripts:
+
+```bash
+npm run reporting:executive
+npm run reporting:queue-health
+```
+
+Set `REPORTING_OWNER_SCOPE=mine|all`, `REPORTING_ASSIGNEE_SCOPE=mine|all`,
+`REPORTING_INCLUDE_DIAGNOSTICS=true`, or `BYPASS_QUEUE_CACHE=true` for local
+read-only reporting diagnostics.
+
 Workspace auth flags:
 
 ```bash
@@ -676,6 +702,7 @@ Useful docs:
 - `docs/cadence-engine-blueprint.md`
 - `docs/rep-queue-blueprint.md`
 - `docs/reporting-blueprint.md`
+- `docs/reporting-blueprint-v2.md`
 - `docs/queue-data-resolution.md`
 - `docs/legacy-lead-retrofit-plan.md`
 

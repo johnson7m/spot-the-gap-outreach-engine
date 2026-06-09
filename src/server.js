@@ -8,6 +8,7 @@ import { logger } from './config/logger.js';
 import { createFixedWindowRateLimiter } from './middleware/rateLimit.js';
 import { createQuickCaptureApiRouter } from './routes/api/quickCaptureRoutes.js';
 import { createQueueApiRouter } from './routes/api/queueRoutes.js';
+import { createReportingApiRouter } from './routes/api/reportingRoutes.js';
 import { createTaskApiRouter } from './routes/api/taskRoutes.js';
 import { processAssessmentSubmission } from './workflows/assessmentWorkflow.js';
 import { createCorrelationId } from './utils/idempotency.js';
@@ -17,6 +18,7 @@ export function createApp({
   appLogger = logger,
   quickCaptureApiDependencies = {},
   queueApiDependencies = {},
+  reportingApiDependencies = {},
   taskApiDependencies = {}
 } = {}) {
   const app = express();
@@ -65,6 +67,15 @@ export function createApp({
       config,
       log: appLogger,
       ...queueApiDependencies
+    })
+  );
+
+  app.use(
+    '/api/reporting',
+    createReportingApiRouter({
+      config,
+      log: appLogger,
+      ...reportingApiDependencies
     })
   );
 
