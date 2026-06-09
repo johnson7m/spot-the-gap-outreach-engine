@@ -51,7 +51,11 @@ export async function loadReportingActivityRecords({
   supabaseClient
 } = {}) {
   if (activitySource?.listReportingActivityRecords) {
-    return activitySource.listReportingActivityRecords({ query, config });
+    const result = await activitySource.listReportingActivityRecords({ query, config });
+    return {
+      ...result,
+      dataSource: result.dataSource ?? 'activity-source'
+    };
   }
 
   const client = supabaseClient ?? createSupabaseClient(config.supabase ?? {});
@@ -61,7 +65,8 @@ export async function loadReportingActivityRecords({
       outboundEvents: [],
       crmSyncLogs: [],
       assessmentSubmissions: [],
-      warnings: ['Supabase is not configured; event-based rep-performance metrics are unavailable.']
+      dataSource: activitySource ? 'activity-source' : 'none',
+      warnings: ['Supabase is not configured; activity-based reporting metrics are unavailable.']
     };
   }
 
@@ -91,6 +96,7 @@ export async function loadReportingActivityRecords({
     outboundEvents: outboundEvents.records,
     crmSyncLogs: crmSyncLogs.records,
     assessmentSubmissions: assessmentSubmissions.records,
+    dataSource: activitySource ? 'activity-source' : 'supabase',
     warnings: uniqueStrings([
       ...outboundEvents.warnings,
       ...crmSyncLogs.warnings,
@@ -171,8 +177,9 @@ function normalizeDateInput(value) {
 }
 
 function endOfDay(value) {
-  const date = normalizeDateInput(value) ?? new Date();
-  date.setHours(23, 59, 59, 999);
+  const source = normalizeDateInput(value) ?? new Date();
+  const date = new Date(source.getTime());
+  date.setUTCHours(23, 59, 59, 999);
   return date;
 }
 

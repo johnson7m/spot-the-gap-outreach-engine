@@ -2,6 +2,7 @@ import express from 'express';
 import { requireWorkspaceAuth } from '../../middleware/supabaseWorkspaceAuth.js';
 import { getExecutiveReportingWorkflow } from '../../workflows/reporting/getExecutiveReportingWorkflow.js';
 import { getQueueHealthReportingWorkflow } from '../../workflows/reporting/getQueueHealthReportingWorkflow.js';
+import { getOperationsReportingWorkflow } from '../../workflows/reporting/getOperationsReportingWorkflow.js';
 import { getRepPerformanceReportingWorkflow } from '../../workflows/reporting/getRepPerformanceReportingWorkflow.js';
 
 const REPORTING_WORKSPACE_ROLES = ['admin', 'operator', 'rep'];
@@ -12,6 +13,7 @@ export function createReportingApiRouter({
   getExecutiveReportingWorkflowFn = getExecutiveReportingWorkflow,
   getQueueHealthReportingWorkflowFn = getQueueHealthReportingWorkflow,
   getRepPerformanceReportingWorkflowFn = getRepPerformanceReportingWorkflow,
+  getOperationsReportingWorkflowFn = getOperationsReportingWorkflow,
   workspaceAuthSupabaseClient,
   dataSource,
   activitySource
@@ -68,6 +70,24 @@ export function createReportingApiRouter({
         log,
         getRepPerformanceReportingWorkflowFn,
         dataSource,
+        activitySource
+      });
+    }
+  );
+
+  router.get(
+    '/operations',
+    requireWorkspaceAuth({
+      config,
+      log,
+      allowedRoles: REPORTING_WORKSPACE_ROLES,
+      supabaseClient: workspaceAuthSupabaseClient
+    }),
+    async (req, res, next) => {
+      await handleOperationsReportingFetch(req, res, next, {
+        config,
+        log,
+        getOperationsReportingWorkflowFn,
         activitySource
       });
     }
@@ -149,6 +169,33 @@ export async function handleRepPerformanceReportingFetch(
       log: req.log ?? log,
       workspaceUser: req.workspaceUser,
       dataSource,
+      activitySource,
+      correlationId: req.correlationId
+    });
+
+    res.json(successEnvelope({ correlationId: req.correlationId, data: result, warnings: result.warnings }));
+  } catch (error) {
+    handleReportingError(error, req, res, next);
+  }
+}
+
+export async function handleOperationsReportingFetch(
+  req,
+  res,
+  next,
+  {
+    config = {},
+    log,
+    getOperationsReportingWorkflowFn = getOperationsReportingWorkflow,
+    activitySource
+  } = {}
+) {
+  try {
+    const result = await getOperationsReportingWorkflowFn({
+      query: req.query ?? {},
+      config,
+      log: req.log ?? log,
+      workspaceUser: req.workspaceUser,
       activitySource,
       correlationId: req.correlationId
     });

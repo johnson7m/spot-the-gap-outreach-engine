@@ -2,7 +2,8 @@
 
 This document defines the reporting architecture for the Visible Gap Workspace.
 Phase 1 implements read-only backend reporting endpoints for executive and queue
-health metrics. Phase 2 implements read-only rep-performance reporting. Later
+health metrics. Phase 2 implements read-only rep-performance reporting. Phase 3
+implements read-only operations reporting from Supabase operational logs. Later
 phases remain planning-only until explicitly implemented.
 Reporting does not perform CRM writes, schema migrations, dashboard UI changes,
 or assessment webhook changes.
@@ -14,18 +15,22 @@ Implemented read-only endpoints:
 - `GET /api/reporting/executive`
 - `GET /api/reporting/queue-health`
 - `GET /api/reporting/rep-performance`
+- `GET /api/reporting/operations`
 
 Implemented read-only diagnostic scripts:
 
 - `npm run reporting:executive`
 - `npm run reporting:queue-health`
 - `npm run reporting:rep-performance`
+- `npm run reporting:operations`
 
 Phase 1/2 reporting reuses the same Twenty source reads, queue read
 cache/degraded handling, test-record hiding, owner scope rules, queue
 classification, coverage audit, and overdue metadata used by the queue
 endpoints. Rep Performance additionally reads Supabase `outbound_events`,
 `crm_sync_logs`, and `assessment_submissions` when Supabase is configured.
+Operations reporting reads Supabase activity logs only and does not perform
+Twenty reads.
 
 ## Reporting Principles
 
@@ -426,33 +431,59 @@ Response contract:
 ```json
 {
   "data": {
-    "range": { "from": "2026-06-01", "to": "2026-06-30" },
-    "taskCreationRate": [],
-    "taskCompletionRate": [],
-    "recoveryEvents": {
-      "attempted": 0,
-      "succeeded": 0,
-      "failed": 0
+    "reportName": "operations",
+    "generatedAt": "2026-06-09T00:00:00.000Z",
+    "dateRange": {
+      "startDate": "2026-05-10T00:00:00.000Z",
+      "endDate": "2026-06-09T23:59:59.999Z"
     },
-    "duplicatePreventionEvents": 0,
-    "queueClassificationEvents": {
-      "coverageAudits": 0,
-      "unclassifiedPeople": 0
+    "metrics": {
+      "totalOutboundEvents": 0,
+      "totalCrmSyncLogs": 0,
+      "successfulSyncs": 0,
+      "failedSyncs": 0,
+      "partialSuccessSyncs": 0,
+      "recoveryEvents": 0,
+      "duplicatePreventionEvents": 0,
+      "manualReviewEvents": 0,
+      "queueClassificationEvents": 0,
+      "taskCreationEvents": 0,
+      "taskCompletionEvents": 0,
+      "quickCaptureCommitEvents": 0,
+      "assessmentWebhookEvents": 0
     },
-    "manualReviewEvents": {
-      "opened": 0,
-      "resolved": 0
+    "breakdowns": {
+      "byEventType": {},
+      "byStatus": {
+        "outboundEvents": {},
+        "crmSyncLogs": {},
+        "assessmentSubmissions": {}
+      },
+      "bySourceWorkflow": [],
+      "byDay": []
     },
-    "crmSyncHealth": {
-      "succeeded": 0,
-      "failed": 0,
-      "partialSuccess": 0,
-      "retryableFailures": 0
-    },
+    "recentFailures": [],
+    "status": "ok",
+    "isPartial": false,
+    "partialReason": null,
+    "retryAfterSeconds": null,
+    "diagnostics": {},
     "warnings": []
   }
 }
 ```
+
+Supported query params:
+
+- `startDate=YYYY-MM-DD`
+- `endDate=YYYY-MM-DD`
+- `includeDiagnostics=true|false`
+
+Operations reporting reads Supabase `outbound_events`, `crm_sync_logs`, and
+`assessment_submissions` for the selected date range. It does not read or write
+Twenty. `recentFailures[]` is intentionally sanitized: secrets, tokens,
+authorization headers, passwords, and API keys are omitted or redacted before
+the response is returned.
 
 ## MVP Recommendation
 
@@ -535,8 +566,8 @@ AI guardrails:
    Review reasons.
 4. Implement `GET /api/reporting/rep-performance` with current-owner attribution
    plus recent event-time attribution where available.
-5. Implement `GET /api/reporting/operations` using `crm_sync_logs` and
-   `outbound_events`.
+5. Implement `GET /api/reporting/operations` using `crm_sync_logs`,
+   `outbound_events`, and `assessment_submissions`. Completed in Phase 3.
 6. Implement `GET /api/reporting/cadence-analytics` after cadence event payloads
    are verified for stage/type consistency.
 7. Wire the workspace reporting page to Phase 1 endpoints.

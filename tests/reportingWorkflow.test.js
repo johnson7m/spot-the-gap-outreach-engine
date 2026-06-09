@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { requireWorkspaceAuth } from '../src/middleware/supabaseWorkspaceAuth.js';
 import {
   handleExecutiveReportingFetch,
+  handleOperationsReportingFetch,
   handleQueueHealthReportingFetch,
   handleRepPerformanceReportingFetch
 } from '../src/routes/api/reportingRoutes.js';
 import { processAssessmentSubmission } from '../src/workflows/assessmentWorkflow.js';
 import { getExecutiveReportingWorkflow } from '../src/workflows/reporting/getExecutiveReportingWorkflow.js';
 import { getQueueHealthReportingWorkflow } from '../src/workflows/reporting/getQueueHealthReportingWorkflow.js';
+import { getOperationsReportingWorkflow } from '../src/workflows/reporting/getOperationsReportingWorkflow.js';
 import { getRepPerformanceReportingWorkflow } from '../src/workflows/reporting/getRepPerformanceReportingWorkflow.js';
 import sampleAssessment from '../data/sample-netlify-assessment-submission.json' with { type: 'json' };
 
@@ -374,6 +376,137 @@ describe('reporting workflows', () => {
     });
   });
 
+  it('returns operations reporting metrics from Supabase activity logs', async () => {
+    const result = await getOperationsReportingWorkflow({
+      query: {
+        startDate: '2026-06-01',
+        endDate: '2026-06-09',
+        includeDiagnostics: true
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      activitySource: fakeActivitySource({
+        outboundEvents: operationsOutboundEvents(),
+        crmSyncLogs: operationsCrmSyncLogs(),
+        assessmentSubmissions: operationsAssessmentSubmissions()
+      }),
+      now: new Date('2026-06-09T15:00:00.000Z')
+    });
+
+    expect(result).toMatchObject({
+      reportName: 'operations',
+      status: 'ok',
+      metrics: {
+        totalOutboundEvents: 9,
+        totalCrmSyncLogs: 6,
+        successfulSyncs: 2,
+        failedSyncs: 2,
+        partialSuccessSyncs: 1,
+        recoveryEvents: 2,
+        duplicatePreventionEvents: 2,
+        manualReviewEvents: 1,
+        queueClassificationEvents: 1,
+        taskCreationEvents: 4,
+        taskCompletionEvents: 1,
+        quickCaptureCommitEvents: 1,
+        assessmentWebhookEvents: 2
+      }
+    });
+    expect(result.breakdowns.byEventType).toMatchObject({
+      task_completed: 1,
+      missing_next_task_created: 2,
+      sent_initial_follow_up_created: 2,
+      quick_capture_planned: 1
+    });
+    expect(result.breakdowns.byStatus.crmSyncLogs).toMatchObject({
+      succeeded: 2,
+      failed: 2,
+      partial_success: 1
+    });
+    expect(result.breakdowns.bySourceWorkflow.map((row) => row.workflow)).toEqual(
+      expect.arrayContaining(['quick_capture', 'recovery', 'assessment_webhook'])
+    );
+    expect(result.breakdowns.byDay.find((row) => row.date === '2026-06-04')).toMatchObject({
+      totalCrmSyncLogs: 2,
+      failedSyncs: 1,
+      taskCreationEvents: 2
+    });
+    expect(result.recentFailures).toHaveLength(4);
+    expect(result.diagnostics.sourceCounts).toMatchObject({
+      outboundEvents: 10,
+      crmSyncLogs: 7,
+      assessmentSubmissions: 3
+    });
+  });
+
+  it('filters operations reporting by date range', async () => {
+    const result = await getOperationsReportingWorkflow({
+      query: {
+        startDate: '2026-06-07',
+        endDate: '2026-06-09'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      activitySource: fakeActivitySource({
+        outboundEvents: operationsOutboundEvents(),
+        crmSyncLogs: operationsCrmSyncLogs(),
+        assessmentSubmissions: operationsAssessmentSubmissions()
+      }),
+      now: new Date('2026-06-09T15:00:00.000Z')
+    });
+
+    expect(result.metrics.totalOutboundEvents).toBe(3);
+    expect(result.metrics.totalCrmSyncLogs).toBe(3);
+    expect(result.metrics.assessmentWebhookEvents).toBe(1);
+    expect(result.metrics.failedSyncs).toBe(1);
+    expect(result.metrics.recoveryEvents).toBe(2);
+  });
+
+  it('sanitizes operations failure details', async () => {
+    const result = await getOperationsReportingWorkflow({
+      query: {
+        startDate: '2026-06-01',
+        endDate: '2026-06-09'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      activitySource: fakeActivitySource({
+        outboundEvents: operationsOutboundEvents(),
+        crmSyncLogs: operationsCrmSyncLogs(),
+        assessmentSubmissions: []
+      }),
+      now: new Date('2026-06-09T15:00:00.000Z')
+    });
+    const serializedFailures = JSON.stringify(result.recentFailures);
+
+    expect(serializedFailures).not.toContain('super-secret-token');
+    expect(serializedFailures).not.toContain('sk-live-secret');
+    expect(serializedFailures).toContain('[REDACTED]');
+    expect(result.recentFailures[0]).not.toHaveProperty('request_payload');
+  });
+
+  it('returns the reporting API envelope for operations', async () => {
+    const response = await invokeReportingRoute({
+      type: 'operations',
+      headers: {
+        authorization: 'Bearer valid-token'
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({
+      ok: true,
+      correlationId: 'reporting-route-correlation',
+      data: {
+        reportName: 'operations',
+        metrics: expect.any(Object),
+        breakdowns: expect.any(Object),
+        recentFailures: expect.any(Array)
+      },
+      errors: []
+    });
+  });
+
   it('uses read-only reporting sources without write methods', async () => {
     const readOnlySource = fakeReportingDataSource();
     const readOnlyActivity = fakeActivitySource();
@@ -412,6 +545,16 @@ describe('reporting workflows', () => {
 
     expect(sourceReadCount).toBe(1);
     expect(activityReadCount).toBe(1);
+
+    await getOperationsReportingWorkflow({
+      query: {},
+      config: baseConfig,
+      workspaceUser: adminUser,
+      activitySource: wrappedActivity,
+      now: new Date('2026-06-09T15:00:00.000Z')
+    });
+
+    expect(activityReadCount).toBe(2);
   });
 
   it('reports degraded status instead of empty metrics when critical reporting reads fail', async () => {
@@ -502,6 +645,18 @@ async function invokeReportingRoute({
       log: silentLog,
       dataSource: fakeReportingDataSource(),
       activitySource: fakeActivitySource()
+    });
+  }
+
+  if (authenticated && type === 'operations') {
+    await handleOperationsReportingFetch(req, res, next, {
+      config,
+      log: silentLog,
+      activitySource: fakeActivitySource({
+        outboundEvents: operationsOutboundEvents(),
+        crmSyncLogs: operationsCrmSyncLogs(),
+        assessmentSubmissions: operationsAssessmentSubmissions()
+      })
     });
   }
 
@@ -848,6 +1003,196 @@ function reportingAssessmentSubmissions() {
           fullName: 'Visible Gap Rep'
         }
       }
+    }
+  ];
+}
+
+function operationsOutboundEvents() {
+  return [
+    {
+      id: 'ops-event-task-completed',
+      event_type: 'task_completed',
+      status: 'sent',
+      created_at: '2026-06-02T12:00:00.000Z',
+      payload: {
+        completion: {
+          touchStatus: 'RESPONDED'
+        }
+      }
+    },
+    {
+      id: 'ops-event-missing-task',
+      event_type: 'missing_next_task_created',
+      status: 'planned',
+      created_at: '2026-06-04T12:00:00.000Z',
+      payload: {
+        workflow: 'missing_next_task_apply'
+      }
+    },
+    {
+      id: 'ops-event-sent-follow-up',
+      event_type: 'sent_initial_follow_up_created',
+      status: 'planned',
+      created_at: '2026-06-05T12:00:00.000Z',
+      payload: {
+        workflow: 'sent_initial_follow_up_apply'
+      }
+    },
+    {
+      id: 'ops-event-quick-capture',
+      event_type: 'quick_capture_planned',
+      status: 'planned',
+      created_at: '2026-06-06T12:00:00.000Z',
+      payload: {
+        workflow: 'quick_capture'
+      }
+    },
+    {
+      id: 'ops-event-recovery',
+      event_type: 'missing_next_task_recovery',
+      status: 'planned',
+      created_at: '2026-06-08T12:00:00.000Z',
+      payload: {
+        workflow: 'recovery'
+      }
+    },
+    {
+      id: 'ops-event-duplicate',
+      event_type: 'missing_next_task_created',
+      status: 'planned',
+      created_at: '2026-06-09T12:00:00.000Z',
+      payload: {
+        duplicateTaskSkipped: true
+      }
+    },
+    {
+      id: 'ops-event-manual-review',
+      event_type: 'manual_review_required',
+      status: 'planned',
+      created_at: '2026-06-03T12:00:00.000Z',
+      payload: {
+        reason: 'requires_review'
+      }
+    },
+    {
+      id: 'ops-event-queue-classification',
+      event_type: 'queue_classification_audit',
+      status: 'planned',
+      created_at: '2026-06-03T13:00:00.000Z',
+      payload: {
+        workflow: 'queue_classification'
+      }
+    },
+    {
+      id: 'ops-event-failed',
+      event_type: 'sent_initial_follow_up_created',
+      status: 'failed',
+      created_at: '2026-06-09T13:00:00.000Z',
+      error_payload: {
+        message: 'Request failed with Bearer super-secret-token',
+        apiKey: 'sk-live-secret',
+        httpStatus: 429
+      }
+    },
+    {
+      id: 'ops-event-old',
+      event_type: 'task_completed',
+      status: 'sent',
+      created_at: '2026-05-01T12:00:00.000Z'
+    }
+  ];
+}
+
+function operationsCrmSyncLogs() {
+  return [
+    {
+      id: 'ops-log-success-task',
+      object_name: 'task',
+      action: 'create',
+      status: 'succeeded',
+      created_at: '2026-06-04T12:30:00.000Z',
+      request_payload: {
+        workflow: 'missing_next_task_apply'
+      }
+    },
+    {
+      id: 'ops-log-success-person',
+      object_name: 'person',
+      action: 'update',
+      status: 'succeeded',
+      created_at: '2026-06-07T12:00:00.000Z'
+    },
+    {
+      id: 'ops-log-failed-company',
+      object_name: 'company',
+      action: 'update',
+      status: 'failed',
+      created_at: '2026-06-04T13:00:00.000Z',
+      error_payload: {
+        message: 'Company update failed',
+        authorization: 'Bearer super-secret-token'
+      }
+    },
+    {
+      id: 'ops-log-partial',
+      object_name: 'person',
+      action: 'upsert',
+      status: 'partial_success',
+      created_at: '2026-06-08T13:00:00.000Z',
+      response_payload: {
+        status: 'partial_success'
+      }
+    },
+    {
+      id: 'ops-log-duplicate-skip',
+      object_name: 'task',
+      action: 'create',
+      status: 'skipped',
+      dedupe_key: 'task:duplicate',
+      created_at: '2026-06-05T13:00:00.000Z',
+      response_payload: {
+        duplicateTaskSkipped: true
+      }
+    },
+    {
+      id: 'ops-log-recovery-failed',
+      object_name: 'task',
+      action: 'recovery_retry',
+      status: 'failed',
+      created_at: '2026-06-09T14:00:00.000Z',
+      error_payload: {
+        message: 'Recovery failed'
+      }
+    },
+    {
+      id: 'ops-log-old',
+      object_name: 'task',
+      action: 'create',
+      status: 'succeeded',
+      created_at: '2026-05-01T13:00:00.000Z'
+    }
+  ];
+}
+
+function operationsAssessmentSubmissions() {
+  return [
+    {
+      id: 'ops-assessment-synced',
+      sync_status: 'synced',
+      created_at: '2026-06-02T14:00:00.000Z'
+    },
+    {
+      id: 'ops-assessment-failed',
+      sync_status: 'failed',
+      created_at: '2026-06-08T14:00:00.000Z',
+      error_payload: {
+        message: 'Webhook sync failed'
+      }
+    },
+    {
+      id: 'ops-assessment-old',
+      sync_status: 'synced',
+      created_at: '2026-05-01T14:00:00.000Z'
     }
   ];
 }

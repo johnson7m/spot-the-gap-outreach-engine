@@ -124,6 +124,7 @@ GET /api/queues/summary
 GET /api/reporting/executive
 GET /api/reporting/queue-health
 GET /api/reporting/rep-performance
+GET /api/reporting/operations
 ```
 
 Preview is dry-run only and is intended for the internal
@@ -624,7 +625,9 @@ rate-limit/degraded states, owner scoping, test-record detection, and queue
 classification rules as the queue endpoints. Phase 1 reports current-state
 executive and queue-health metrics. Phase 2 adds read-only rep-performance
 metrics from Twenty current state plus Supabase activity logs when configured.
-Reporting performs no CRM or Supabase writes.
+Phase 3 adds read-only operations reporting from Supabase `outbound_events`,
+`crm_sync_logs`, and `assessment_submissions`. Reporting performs no CRM or
+Supabase writes.
 
 Diagnostic scripts:
 
@@ -632,13 +635,14 @@ Diagnostic scripts:
 npm run reporting:executive
 npm run reporting:queue-health
 npm run reporting:rep-performance
+npm run reporting:operations
 ```
 
 Set `REPORTING_OWNER_SCOPE=mine|all`, `REPORTING_ASSIGNEE_SCOPE=mine|all`,
 `REPORTING_INCLUDE_DIAGNOSTICS=true`, `REPORTING_START_DATE=YYYY-MM-DD`,
 `REPORTING_END_DATE=YYYY-MM-DD`, or `BYPASS_QUEUE_CACHE=true` for local
-read-only reporting diagnostics. Rep performance defaults to the last 30 days
-when no date range is provided.
+read-only reporting diagnostics. Rep performance and operations default to the
+last 30 days when no date range is provided.
 
 Workspace auth flags:
 

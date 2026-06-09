@@ -337,6 +337,112 @@ export function buildRepPerformanceReporting({
   };
 }
 
+export function buildOperationsReporting({
+  outboundEvents = [],
+  crmSyncLogs = [],
+  assessmentSubmissions = [],
+  query = {},
+  now = new Date(),
+  diagnostics = {}
+} = {}) {
+  const dateRange = resolveReportingDateRange(query, now);
+  const eventsInRange = outboundEvents.filter((event) =>
+    isWithinDateRange(readRecordDate(event), dateRange)
+  );
+  const logsInRange = crmSyncLogs.filter((log) => isWithinDateRange(readRecordDate(log), dateRange));
+  const submissionsInRange = assessmentSubmissions.filter((submission) =>
+    isWithinDateRange(readRecordDate(submission), dateRange)
+  );
+  const outboundTaskCreationEvents = eventsInRange.filter(isTaskCreationOutboundEvent).length;
+  const crmTaskCreationEvents = logsInRange.filter(isTaskCreateCrmLog).length;
+  const failures = buildRecentOperationFailures({
+    outboundEvents: eventsInRange,
+    crmSyncLogs: logsInRange,
+    assessmentSubmissions: submissionsInRange
+  });
+
+  return {
+    reportName: 'operations',
+    generatedAt: now.toISOString(),
+    dateRange: {
+      startDate: dateRange.startDate.toISOString(),
+      endDate: endOfDay(dateRange.endDate).toISOString()
+    },
+    metrics: {
+      totalOutboundEvents: eventsInRange.length,
+      totalCrmSyncLogs: logsInRange.length,
+      successfulSyncs: logsInRange.filter(isSuccessfulCrmSync).length,
+      failedSyncs: logsInRange.filter(isFailedCrmSync).length,
+      partialSuccessSyncs: logsInRange.filter(isPartialSuccessCrmSync).length,
+      recoveryEvents: countMatchingOperations({
+        outboundEvents: eventsInRange,
+        crmSyncLogs: logsInRange,
+        predicate: isRecoveryOperation
+      }),
+      duplicatePreventionEvents: countMatchingOperations({
+        outboundEvents: eventsInRange,
+        crmSyncLogs: logsInRange,
+        predicate: isDuplicatePreventionOperation
+      }),
+      manualReviewEvents: countMatchingOperations({
+        outboundEvents: eventsInRange,
+        crmSyncLogs: logsInRange,
+        predicate: isManualReviewOperation
+      }),
+      queueClassificationEvents: countMatchingOperations({
+        outboundEvents: eventsInRange,
+        crmSyncLogs: logsInRange,
+        predicate: isQueueClassificationOperation
+      }),
+      taskCreationEvents:
+        outboundTaskCreationEvents > 0 ? outboundTaskCreationEvents : crmTaskCreationEvents,
+      taskCompletionEvents: eventsInRange.filter((event) => readEventType(event) === 'TASK_COMPLETED')
+        .length,
+      quickCaptureCommitEvents: eventsInRange.filter(isQuickCaptureOperation).length,
+      assessmentWebhookEvents: submissionsInRange.length
+    },
+    breakdowns: {
+      byEventType: countBy(eventsInRange, (event) => readEventType(event).toLowerCase() || 'unknown'),
+      byStatus: {
+        outboundEvents: countBy(eventsInRange, (event) => normalizeStatus(event.status)),
+        crmSyncLogs: countBy(logsInRange, (log) => normalizeStatus(log.status)),
+        assessmentSubmissions: countBy(submissionsInRange, (submission) =>
+          normalizeStatus(submission.sync_status ?? submission.syncStatus)
+        )
+      },
+      bySourceWorkflow: buildWorkflowBreakdown({
+        outboundEvents: eventsInRange,
+        crmSyncLogs: logsInRange,
+        assessmentSubmissions: submissionsInRange
+      }),
+      byDay: buildOperationsDailyBreakdown({
+        dateRange,
+        outboundEvents: eventsInRange,
+        crmSyncLogs: logsInRange,
+        assessmentSubmissions: submissionsInRange
+      })
+    },
+    recentFailures: failures.slice(0, 10),
+    diagnostics: truthyString(query.includeDiagnostics) === 'true'
+      ? {
+          ...diagnostics,
+          sourceCounts: {
+            outboundEvents: outboundEvents.length,
+            crmSyncLogs: crmSyncLogs.length,
+            assessmentSubmissions: assessmentSubmissions.length
+          },
+          inRangeCounts: {
+            outboundEvents: eventsInRange.length,
+            crmSyncLogs: logsInRange.length,
+            assessmentSubmissions: submissionsInRange.length
+          },
+          failureCount: failures.length
+        }
+      : undefined,
+    warnings: []
+  };
+}
+
 function buildReportingSnapshot({
   people = [],
   companies = [],
@@ -745,6 +851,491 @@ function isTaskCreationEvent(eventType = '') {
   ].includes(eventType);
 }
 
+function isTaskCreationOutboundEvent(event = {}) {
+  return isTaskCreationEvent(readEventType(event));
+}
+
+function isTaskCreateCrmLog(log = {}) {
+  return (
+    normalizeSelect(log.object_name ?? log.objectName) === 'TASK' &&
+    ['CREATE', 'UPSERT'].includes(normalizeSelect(log.action)) &&
+    normalizeStatus(log.status) === 'succeeded'
+  );
+}
+
+function isSuccessfulCrmSync(log = {}) {
+  return normalizeStatus(log.status) === 'succeeded';
+}
+
+function isFailedCrmSync(log = {}) {
+  return normalizeStatus(log.status) === 'failed';
+}
+
+function isPartialSuccessCrmSync(log = {}) {
+  const statuses = [
+    normalizeStatus(log.status),
+    normalizeStatus(log.response_payload?.status ?? log.responsePayload?.status),
+    normalizeStatus(log.error_payload?.status ?? log.errorPayload?.status)
+  ];
+
+  return statuses.some((status) => ['partial_success', 'partial_failure'].includes(status));
+}
+
+function countMatchingOperations({ outboundEvents = [], crmSyncLogs = [], predicate }) {
+  return (
+    outboundEvents.filter((event) => predicate({ kind: 'outbound_event', record: event })).length +
+    crmSyncLogs.filter((log) => predicate({ kind: 'crm_sync_log', record: log })).length
+  );
+}
+
+function isRecoveryOperation({ kind, record = {} } = {}) {
+  return operationSearchText(kind, record).includes('recovery') ||
+    operationSearchText(kind, record).includes('recover');
+}
+
+function isDuplicatePreventionOperation({ kind, record = {} } = {}) {
+  const payloads = operationPayloads(kind, record);
+  const text = operationSearchText(kind, record);
+
+  return (
+    text.includes('duplicate') ||
+    payloads.some((payload) =>
+      Boolean(
+        payload?.duplicateAvoided ??
+          payload?.duplicateTaskSkipped ??
+          payload?.duplicateSkipped ??
+          payload?.duplicate ??
+          payload?.dedupeSkipped
+      )
+    ) ||
+    (kind === 'crm_sync_log' &&
+      normalizeStatus(record.status) === 'skipped' &&
+      Boolean(record.dedupe_key ?? record.dedupeKey))
+  );
+}
+
+function isManualReviewOperation({ kind, record = {} } = {}) {
+  const text = operationSearchText(kind, record);
+  return text.includes('manual_review') || text.includes('requires_review') || text.includes('review_required');
+}
+
+function isQueueClassificationOperation({ kind, record = {} } = {}) {
+  const text = operationSearchText(kind, record);
+  return text.includes('queue_classification') || text.includes('coverage_audit') || text.includes('classification');
+}
+
+function isQuickCaptureOperation(event = {}) {
+  const eventType = readEventType(event);
+  return eventType.includes('QUICK_CAPTURE');
+}
+
+function buildWorkflowBreakdown({
+  outboundEvents = [],
+  crmSyncLogs = [],
+  assessmentSubmissions = []
+} = {}) {
+  const workflows = new Map();
+  const ensureWorkflow = (workflow) => {
+    const key = workflow || 'unknown';
+    const existing = workflows.get(key);
+
+    if (existing) {
+      return existing;
+    }
+
+    const row = {
+      workflow: key,
+      total: 0,
+      outboundEvents: 0,
+      crmSyncLogs: 0,
+      assessmentSubmissions: 0,
+      failed: 0
+    };
+
+    workflows.set(key, row);
+    return row;
+  };
+
+  for (const event of outboundEvents) {
+    const row = ensureWorkflow(inferWorkflow('outbound_event', event));
+    row.total += 1;
+    row.outboundEvents += 1;
+
+    if (normalizeStatus(event.status) === 'failed') {
+      row.failed += 1;
+    }
+  }
+
+  for (const log of crmSyncLogs) {
+    const row = ensureWorkflow(inferWorkflow('crm_sync_log', log));
+    row.total += 1;
+    row.crmSyncLogs += 1;
+
+    if (isFailedCrmSync(log)) {
+      row.failed += 1;
+    }
+  }
+
+  for (const submission of assessmentSubmissions) {
+    const row = ensureWorkflow('assessment_webhook');
+    row.total += 1;
+    row.assessmentSubmissions += 1;
+
+    if (normalizeStatus(submission.sync_status ?? submission.syncStatus) === 'failed') {
+      row.failed += 1;
+    }
+  }
+
+  return [...workflows.values()].sort((left, right) =>
+    left.workflow.localeCompare(right.workflow)
+  );
+}
+
+function buildOperationsDailyBreakdown({
+  dateRange,
+  outboundEvents = [],
+  crmSyncLogs = [],
+  assessmentSubmissions = []
+} = {}) {
+  const days = new Map();
+  const rangeDays = enumerateDays(dateRange);
+  const ensureDay = (date) => {
+    const key = date;
+    const existing = days.get(key);
+
+    if (existing) {
+      return existing;
+    }
+
+    const row = {
+      date: key,
+      totalOutboundEvents: 0,
+      totalCrmSyncLogs: 0,
+      assessmentWebhookEvents: 0,
+      successfulSyncs: 0,
+      failedSyncs: 0,
+      taskCreationEvents: 0,
+      taskCompletionEvents: 0,
+      recoveryEvents: 0
+    };
+
+    days.set(key, row);
+    return row;
+  };
+
+  for (const day of rangeDays) {
+    ensureDay(day);
+  }
+
+  for (const event of outboundEvents) {
+    const row = ensureDay(toDayKey(readRecordDate(event)));
+    row.totalOutboundEvents += 1;
+
+    if (isTaskCreationOutboundEvent(event)) {
+      row.taskCreationEvents += 1;
+    }
+
+    if (readEventType(event) === 'TASK_COMPLETED') {
+      row.taskCompletionEvents += 1;
+    }
+
+    if (isRecoveryOperation({ kind: 'outbound_event', record: event })) {
+      row.recoveryEvents += 1;
+    }
+  }
+
+  for (const log of crmSyncLogs) {
+    const row = ensureDay(toDayKey(readRecordDate(log)));
+    row.totalCrmSyncLogs += 1;
+
+    if (isSuccessfulCrmSync(log)) {
+      row.successfulSyncs += 1;
+    }
+
+    if (isFailedCrmSync(log)) {
+      row.failedSyncs += 1;
+    }
+
+    if (isTaskCreateCrmLog(log)) {
+      row.taskCreationEvents += 1;
+    }
+
+    if (isRecoveryOperation({ kind: 'crm_sync_log', record: log })) {
+      row.recoveryEvents += 1;
+    }
+  }
+
+  for (const submission of assessmentSubmissions) {
+    const row = ensureDay(toDayKey(readRecordDate(submission)));
+    row.assessmentWebhookEvents += 1;
+  }
+
+  return [...days.values()].sort((left, right) => left.date.localeCompare(right.date));
+}
+
+function buildRecentOperationFailures({
+  outboundEvents = [],
+  crmSyncLogs = [],
+  assessmentSubmissions = []
+} = {}) {
+  return [
+    ...outboundEvents
+      .filter((event) => normalizeStatus(event.status) === 'failed' || event.error_payload)
+      .map((event) => ({
+        source: 'outbound_events',
+        id: event.id ?? null,
+        occurredAt: readRecordDate(event)?.toISOString() ?? null,
+        correlationId: event.correlation_id ?? event.correlationId ?? null,
+        eventType: event.event_type ?? event.eventType ?? null,
+        status: normalizeStatus(event.status),
+        workflow: inferWorkflow('outbound_event', event),
+        message: extractErrorMessage(event.error_payload ?? event.errorPayload),
+        details: sanitizeErrorDetails(event.error_payload ?? event.errorPayload)
+      })),
+    ...crmSyncLogs
+      .filter((log) => isFailedCrmSync(log) || log.error_payload || log.errorPayload)
+      .map((log) => ({
+        source: 'crm_sync_logs',
+        id: log.id ?? null,
+        occurredAt: readRecordDate(log)?.toISOString() ?? null,
+        correlationId: log.correlation_id ?? log.correlationId ?? null,
+        provider: log.provider ?? null,
+        objectName: log.object_name ?? log.objectName ?? null,
+        action: log.action ?? null,
+        status: normalizeStatus(log.status),
+        workflow: inferWorkflow('crm_sync_log', log),
+        message: extractErrorMessage(log.error_payload ?? log.errorPayload ?? log.response_payload),
+        details: sanitizeErrorDetails(log.error_payload ?? log.errorPayload ?? log.response_payload)
+      })),
+    ...assessmentSubmissions
+      .filter((submission) =>
+        ['failed', 'partial_failure'].includes(
+          normalizeStatus(submission.sync_status ?? submission.syncStatus)
+        )
+      )
+      .map((submission) => ({
+        source: 'assessment_submissions',
+        id: submission.id ?? null,
+        occurredAt: readRecordDate(submission)?.toISOString() ?? null,
+        correlationId: submission.correlation_id ?? submission.correlationId ?? null,
+        status: normalizeStatus(submission.sync_status ?? submission.syncStatus),
+        workflow: 'assessment_webhook',
+        message: extractErrorMessage(submission.error_payload ?? submission.errorPayload),
+        details: sanitizeErrorDetails(submission.error_payload ?? submission.errorPayload)
+      }))
+  ].sort((left, right) => String(right.occurredAt ?? '').localeCompare(String(left.occurredAt ?? '')));
+}
+
+function inferWorkflow(kind, record = {}) {
+  if (kind === 'assessment_webhook') {
+    return 'assessment_webhook';
+  }
+
+  const payloads = operationPayloads(kind, record);
+  const explicit = firstString(
+    record.workflow,
+    record.workflow_name,
+    record.workflowName,
+    ...payloads.flatMap((payload) => [
+      payload?.workflow,
+      payload?.workflowName,
+      payload?.sourceWorkflow,
+      payload?.source,
+      payload?.operation
+    ])
+  );
+
+  if (explicit) {
+    return normalizeKey(explicit) || 'unknown';
+  }
+
+  const eventType = kind === 'outbound_event' ? readEventType(record) : '';
+  const action = normalizeSelect(record.action);
+  const objectName = normalizeSelect(record.object_name ?? record.objectName);
+  const text = operationSearchText(kind, record);
+
+  if (eventType.includes('QUICK_CAPTURE') || text.includes('quick_capture')) {
+    return 'quick_capture';
+  }
+
+  if (eventType === 'TASK_COMPLETED' || eventType === 'NEXT_TASK_CREATED') {
+    return 'task_completion';
+  }
+
+  if (eventType.includes('MISSING_NEXT_TASK')) {
+    return 'missing_next_task_apply';
+  }
+
+  if (eventType.includes('SENT_INITIAL_FOLLOW_UP')) {
+    return 'sent_initial_follow_up_apply';
+  }
+
+  if (eventType.includes('MANUAL_LEAD_NORMALIZED')) {
+    return 'manual_lead_normalization';
+  }
+
+  if (eventType.includes('LEGACY_OWNER')) {
+    return 'legacy_owner_cleanup';
+  }
+
+  if (eventType.includes('LEGACY_TASK')) {
+    return 'legacy_task_retrofit';
+  }
+
+  if (eventType.includes('LEGACY')) {
+    return 'legacy_retrofit';
+  }
+
+  if (text.includes('recovery') || text.includes('recover')) {
+    return 'recovery';
+  }
+
+  if (objectName || action) {
+    return normalizeKey([objectName.toLowerCase(), action.toLowerCase()].filter(Boolean).join('_'));
+  }
+
+  return 'unknown';
+}
+
+function operationSearchText(kind, record = {}) {
+  return [
+    kind,
+    record.event_type,
+    record.eventType,
+    record.status,
+    record.action,
+    record.object_name,
+    record.objectName,
+    record.correlation_id,
+    record.correlationId,
+    ...operationPayloads(kind, record).map((payload) => JSON.stringify(payload ?? {}))
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+}
+
+function operationPayloads(kind, record = {}) {
+  if (kind === 'outbound_event') {
+    return [record.payload, record.approval_payload, record.error_payload, record.errorPayload];
+  }
+
+  return [
+    record.request_payload,
+    record.requestPayload,
+    record.response_payload,
+    record.responsePayload,
+    record.error_payload,
+    record.errorPayload
+  ];
+}
+
+function readEventType(event = {}) {
+  return normalizeSelect(event.event_type ?? event.eventType);
+}
+
+function normalizeStatus(value) {
+  return normalizeKey(value || 'unknown') || 'unknown';
+}
+
+function enumerateDays({ startDate, endDate } = {}) {
+  const days = [];
+  const cursor = new Date(startDate);
+  const stop = endOfDay(endDate);
+  let guard = 0;
+
+  cursor.setHours(0, 0, 0, 0);
+
+  while (cursor.getTime() <= stop.getTime() && guard < 370) {
+    days.push(toDayKey(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+    guard += 1;
+  }
+
+  return days;
+}
+
+function toDayKey(value) {
+  const date = normalizeDateInput(value);
+  return date ? date.toISOString().slice(0, 10) : 'unknown';
+}
+
+function extractErrorMessage(value) {
+  if (!value) {
+    return null;
+  }
+
+  if (typeof value === 'string') {
+    return truncateString(redactSensitiveText(value), 300);
+  }
+
+  if (typeof value !== 'object') {
+    return truncateString(String(value), 300);
+  }
+
+  return truncateString(
+    redactSensitiveText(
+      firstString(
+        value.message,
+        value.error,
+        value.errorMessage,
+        value.reason,
+        value.statusText,
+        value.detail,
+        value.details
+      ) || JSON.stringify(sanitizeErrorDetails(value))
+    ),
+    300
+  );
+}
+
+function sanitizeErrorDetails(value, depth = 0) {
+  if (value === null || value === undefined) {
+    return value;
+  }
+
+  if (depth > 4) {
+    return '[Truncated]';
+  }
+
+  if (typeof value === 'string') {
+    return truncateString(redactSensitiveText(value), 500);
+  }
+
+  if (typeof value !== 'object') {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.slice(0, 10).map((item) => sanitizeErrorDetails(item, depth + 1));
+  }
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => !isSensitiveKey(key))
+      .slice(0, 25)
+      .map(([key, child]) => [key, sanitizeErrorDetails(child, depth + 1)])
+  );
+}
+
+function isSensitiveKey(key = '') {
+  return /token|secret|password|authorization|api[-_]?key|bearer|jwt/i.test(key);
+}
+
+function redactSensitiveText(value = '') {
+  return value.replace(/Bearer\s+[A-Za-z0-9._~+/-]+=*/gi, 'Bearer [REDACTED]');
+}
+
+function truncateString(value = '', maxLength = 500) {
+  const text = String(value);
+  return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+}
+
+function truthyString(value) {
+  return String(value ?? '').toLowerCase();
+}
+
 function isWithinDateRange(date, { startDate, endDate } = {}) {
   if (!date) {
     return false;
@@ -834,8 +1425,9 @@ function toDateOnly(value) {
 }
 
 function endOfDay(value) {
-  const date = normalizeDateInput(value);
-  date.setHours(23, 59, 59, 999);
+  const source = normalizeDateInput(value) ?? new Date();
+  const date = new Date(source.getTime());
+  date.setUTCHours(23, 59, 59, 999);
   return date;
 }
 

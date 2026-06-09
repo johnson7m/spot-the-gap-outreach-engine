@@ -1,9 +1,9 @@
 # Workspace API Contract
 
 This document defines the API surface the `visible-gap-workspace` should use.
-Quick Capture preview/commit, task completion, and read-only rep queue endpoints
-are implemented. Duplicate, recovery, reporting, pause, and resume endpoints are
-still planned.
+Quick Capture preview/commit, task completion, read-only rep queue endpoints,
+and read-only reporting endpoints are implemented. Duplicate, recovery, pause,
+and resume endpoints are still planned.
 
 The workspace should call the outreach engine only. The browser should not call
 Twenty or Supabase directly.
@@ -101,6 +101,10 @@ Implemented endpoints:
 - `GET /api/queues/pipeline-review`
 - `GET /api/queues/unassigned-tasks`
 - `GET /api/queues/summary`
+- `GET /api/reporting/executive`
+- `GET /api/reporting/queue-health`
+- `GET /api/reporting/rep-performance`
+- `GET /api/reporting/operations`
 
 Planned endpoints:
 
@@ -1244,6 +1248,7 @@ Endpoints require Supabase workspace JWT auth and role `admin`, `operator`, or
 GET /api/reporting/executive?ownerScope=all&includeDiagnostics=true
 GET /api/reporting/queue-health?ownerScope=all&includeDiagnostics=true
 GET /api/reporting/rep-performance?ownerScope=all&startDate=2026-06-01&endDate=2026-06-30
+GET /api/reporting/operations?startDate=2026-06-01&endDate=2026-06-30&includeDiagnostics=true
 ```
 
 Common response envelope:
@@ -1326,6 +1331,35 @@ Rep Performance supports `ownerScope=mine|all`, `startDate`, `endDate`, and
 task load come from Twenty. Recent activity comes from Task dates plus Supabase
 `outbound_events` and `assessment_submissions` when configured. Missing
 owner/assignee records are grouped under `repKey="missing_owner"`.
+
+`GET /api/reporting/operations` returns:
+
+- `dateRange`
+- `metrics.totalOutboundEvents`
+- `metrics.totalCrmSyncLogs`
+- `metrics.successfulSyncs`
+- `metrics.failedSyncs`
+- `metrics.partialSuccessSyncs`
+- `metrics.recoveryEvents`
+- `metrics.duplicatePreventionEvents`
+- `metrics.manualReviewEvents`
+- `metrics.queueClassificationEvents`
+- `metrics.taskCreationEvents`
+- `metrics.taskCompletionEvents`
+- `metrics.quickCaptureCommitEvents`
+- `metrics.assessmentWebhookEvents`
+- `breakdowns.byEventType`
+- `breakdowns.byStatus`
+- `breakdowns.bySourceWorkflow`
+- `breakdowns.byDay`
+- `recentFailures[]`
+
+Operations supports `startDate`, `endDate`, and `includeDiagnostics`. It reads
+Supabase `outbound_events`, `crm_sync_logs`, and `assessment_submissions` only.
+It does not read or write Twenty. `recentFailures[]` intentionally returns only
+safe fields such as source, record id, timestamp, correlation id, event type,
+object/action/status, workflow, message, and sanitized error details. API keys,
+tokens, authorization headers, passwords, and secrets are omitted or redacted.
 
 When critical Twenty reads are rate-limited or degraded, reporting mirrors the
 queue API degraded contract:
