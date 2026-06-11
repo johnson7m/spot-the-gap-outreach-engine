@@ -70,6 +70,7 @@ const envSchema = z.object({
   QUEUE_READ_CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(90),
   WORKSPACE_SNAPSHOT_ENABLED: booleanFromEnv.default(true),
   WORKSPACE_SNAPSHOT_TTL_SECONDS: z.coerce.number().int().positive().default(120),
+  REPORTING_PERFORMANCE_BASELINE_DATE: z.string().optional().or(z.literal('')),
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_MODEL: z.string().optional().default('')
 });
@@ -168,6 +169,9 @@ export function loadConfig() {
     workspaceSnapshot: {
       enabled: parsed.data.WORKSPACE_SNAPSHOT_ENABLED,
       ttlSeconds: parsed.data.WORKSPACE_SNAPSHOT_TTL_SECONDS
+    },
+    reporting: {
+      performanceBaselineDate: parsed.data.REPORTING_PERFORMANCE_BASELINE_DATE || '2026-06-09'
     },
     openai: {
       apiKey: parsed.data.OPENAI_API_KEY,

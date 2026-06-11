@@ -751,6 +751,25 @@ Useful docs:
 - `docs/queue-data-resolution.md`
 - `docs/legacy-lead-retrofit-plan.md`
 - `docs/workspace-performance-stabilization-plan.md`
+- `docs/workload-staggering-and-performance-targets.md`
+
+Task completion diagnostics:
+
+```bash
+TASK_ID=<twenty-task-id> PERSON_ID=<twenty-person-id> npm run tasks:inspect-completion-readiness
+```
+
+The diagnostic is read-only. It resolves the Person/Task cadence context and
+previews whether `POST /api/tasks/:id/complete` has a supported transition.
+
+Rep-performance reporting defaults to the MVP baseline date configured by:
+
+```text
+REPORTING_PERFORMANCE_BASELINE_DATE=2026-06-09
+```
+
+This keeps retrofit-era events out of activity metrics while preserving current
+CRM totals and queue counts.
 
 ## Roadmap
 

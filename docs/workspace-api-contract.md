@@ -1047,7 +1047,8 @@ Missing next-task operations:
 ## POST /api/tasks/:id/complete
 
 Records a completed manual outbound touch, updates the Person cadence state,
-and creates exactly one next cadence task when the cadence rule calls for one.
+marks the completed Twenty task as `DONE`, and creates exactly one next cadence
+task when the cadence rule calls for one.
 This endpoint does not automate LinkedIn actions and does not require
 relationship writes.
 
@@ -1076,6 +1077,30 @@ Request:
 For dry-run/testing contexts, the body may include `personSnapshot` with
 `cadenceName` and `cadenceStage`. Normal live workspace calls should send
 `personId`; the engine fetches the Person through the CRM adapter.
+
+## GET /api/tasks/:id/completion-readiness
+
+Read-only diagnostic endpoint for checking whether a Task/Person pair has
+enough cadence context to complete safely.
+
+Auth matches task completion: `admin`, `operator`, and `rep`.
+
+Query:
+
+```text
+GET /api/tasks/:id/completion-readiness?personId=<twenty-person-id>
+```
+
+Returns:
+
+- `status=ready|blocked`
+- resolved Person cadence context
+- resolved Task title/status/body-derived cadence fields where available
+- transition preview
+- blockers and warnings
+- supported stages for the cadence if no transition rule exists
+
+This endpoint never writes to Twenty or Supabase.
 
 Supported `completion.channel` values:
 
@@ -1371,8 +1396,10 @@ Common response envelope:
 - per-rep `freshLeadCount`
 - per-rep `pipelineReviewCount`
 
-Rep Performance supports `ownerScope=mine|all`, `startDate`, `endDate`, and
-`includeDiagnostics`. It defaults to the last 30 days. Current ownership and
+Rep Performance supports `ownerScope=mine|all`, `startDate`, `endDate`,
+`includeAllTime=true`, and `includeDiagnostics`. If no explicit start date is
+provided, the engine applies `REPORTING_PERFORMANCE_BASELINE_DATE` so retrofit
+activity does not inflate normal rep-performance metrics. Current ownership and
 task load come from Twenty. Recent activity comes from Task dates plus Supabase
 `outbound_events` and `assessment_submissions` when configured. Missing
 owner/assignee records are grouped under `repKey="missing_owner"`.

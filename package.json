@@ -37,6 +37,7 @@
     "queues:apply-sent-initial-follow-ups": "node scripts/applySentInitialFollowUps.js",
     "queues:recover-missing-next-tasks": "node scripts/recoverMissingNextTasks.js",
     "queues:recover-sent-initial-follow-ups": "node scripts/recoverSentInitialFollowUps.js",
+    "tasks:inspect-completion-readiness": "node scripts/inspectTaskCompletionReadiness.js",
     "reporting:executive": "node scripts/getExecutiveReporting.js",
     "reporting:queue-health": "node scripts/getQueueHealthReporting.js",
     "reporting:rep-performance": "node scripts/getRepPerformanceReporting.js",

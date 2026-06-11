@@ -38,8 +38,12 @@ export function createCrmAdapter({
       return crmProvider.getPersonById(personId);
     },
 
-    async syncTaskCompletion({ personUpdate, nextTask }) {
-      return crmProvider.syncTaskCompletion({ personUpdate, nextTask });
+    async getTaskById(taskId) {
+      return crmProvider.getTaskById(taskId);
+    },
+
+    async syncTaskCompletion({ completedTask, personUpdate, nextTask }) {
+      return crmProvider.syncTaskCompletion({ completedTask, personUpdate, nextTask });
     }
   };
 }

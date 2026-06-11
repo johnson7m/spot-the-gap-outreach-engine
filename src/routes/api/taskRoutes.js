@@ -4,6 +4,7 @@ import { requireWorkspaceAuth } from '../../middleware/supabaseWorkspaceAuth.js'
 import { createOperationalStore } from '../../persistence/operationalStore.js';
 import { invalidateWorkspaceSnapshot } from '../../services/workspaceSnapshotService.js';
 import { completeOutboundTaskWorkflow } from '../../workflows/outbound/completeTaskWorkflow.js';
+import { inspectTaskCompletionReadinessWorkflow } from '../../workflows/outbound/inspectTaskCompletionReadinessWorkflow.js';
 
 const TASK_COMPLETION_WORKSPACE_ROLES = ['admin', 'operator', 'rep'];
 
@@ -11,6 +12,7 @@ export function createTaskApiRouter({
   config = {},
   log,
   completeOutboundTaskWorkflowFn = completeOutboundTaskWorkflow,
+  inspectTaskCompletionReadinessWorkflowFn = inspectTaskCompletionReadinessWorkflow,
   createCrmAdapterFn = createCrmAdapter,
   createOperationalStoreFn = createOperationalStore,
   workspaceAuthSupabaseClient
@@ -32,6 +34,24 @@ export function createTaskApiRouter({
         completeOutboundTaskWorkflowFn,
         createCrmAdapterFn,
         createOperationalStoreFn
+      });
+    }
+  );
+
+  router.get(
+    '/:id/completion-readiness',
+    requireWorkspaceAuth({
+      config,
+      log,
+      allowedRoles: TASK_COMPLETION_WORKSPACE_ROLES,
+      supabaseClient: workspaceAuthSupabaseClient
+    }),
+    async (req, res, next) => {
+      await handleTaskCompletionReadiness(req, res, next, {
+        config,
+        log,
+        inspectTaskCompletionReadinessWorkflowFn,
+        createCrmAdapterFn
       });
     }
   );
@@ -81,6 +101,45 @@ export async function handleTaskComplete(
       correlationId: req.correlationId,
       data: toTaskCompletionResponse(result),
       warnings: buildTaskCompletionWarnings(result)
+    }));
+  } catch (error) {
+    handleTaskCompletionError(error, req, res, next);
+  }
+}
+
+export async function handleTaskCompletionReadiness(
+  req,
+  res,
+  next,
+  {
+    config = {},
+    log,
+    inspectTaskCompletionReadinessWorkflowFn = inspectTaskCompletionReadinessWorkflow,
+    createCrmAdapterFn = createCrmAdapter
+  } = {}
+) {
+  try {
+    const crmAdapter = createCrmAdapterFn({
+      provider: config.crmProvider ?? 'twenty',
+      config,
+      log: req.log ?? log
+    });
+    const result = await inspectTaskCompletionReadinessWorkflowFn({
+      input: {
+        ...req.query,
+        taskId: req.params.id,
+        personId: req.query?.personId ?? req.body?.personId
+      },
+      config,
+      log: req.log ?? log,
+      crmAdapter,
+      correlationId: req.correlationId
+    });
+
+    res.status(result.status === 'blocked' ? 422 : 200).json(successEnvelope({
+      correlationId: req.correlationId,
+      data: result,
+      warnings: result.warnings ?? []
     }));
   } catch (error) {
     handleTaskCompletionError(error, req, res, next);
@@ -182,7 +241,8 @@ function handleTaskCompletionError(error, req, res, next) {
     errorEnvelope({
       correlationId: req.correlationId,
       code,
-      message: error.message
+      message: error.message,
+      data: error.details ?? null
     })
   );
 }

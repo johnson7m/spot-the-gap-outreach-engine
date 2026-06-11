@@ -184,16 +184,29 @@ export function createTwentyProvider({
       return twentyRestClient.getRecord('people', personId);
     },
 
-    async syncTaskCompletion({ personUpdate, nextTask }) {
+    async getTaskById(taskId) {
+      if (!taskId) {
+        return null;
+      }
+
+      if (!config.apiKey || !twentyRestClient) {
+        return null;
+      }
+
+      return twentyRestClient.getRecord('tasks', taskId);
+    },
+
+    async syncTaskCompletion({ completedTask, personUpdate, nextTask }) {
       if (!dryRun && !config.apiKey) {
         return {
           provider: 'twenty',
           status: 'blocked_configuration',
           dryRun: false,
           reason: 'Twenty CRM live task completion sync is enabled, but TWENTY_API_KEY is missing.',
-          operations: [personUpdate, nextTask].filter(Boolean).map((operation) => ({
+          operations: [completedTask, personUpdate, nextTask].filter(Boolean).map((operation) => ({
             object: operation.object,
             action: operation.action,
+            id: operation.id,
             status: 'planned',
             dedupeKey: operation.dedupeKey,
             payload: operation.payload
@@ -203,6 +216,12 @@ export function createTwentyProvider({
       }
 
       const operations = [];
+
+      if (completedTask) {
+        operations.push(
+          await runOperation(() => taskClient.updateTaskById(completedTask), completedTask, new Set())
+        );
+      }
 
       operations.push(
         await runOperation(() => peopleClient.updatePersonById(personUpdate), personUpdate, new Set())
@@ -257,7 +276,9 @@ async function syncTaskCompletionRelationships({
   nextTask,
   operations
 }) {
-  const taskOperation = operations.find((operation) => operation.object === 'task');
+  const taskOperation = operations.find(
+    (operation) => operation.object === 'task' && operation.dedupeKey === nextTask?.dedupeKey
+  );
   const taskId = taskOperation?.response?.id ?? taskOperation?.id ?? null;
   const personId = personUpdate?.id ?? null;
 

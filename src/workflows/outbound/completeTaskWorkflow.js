@@ -1,6 +1,7 @@
 import { createCrmAdapter } from '../../integrations/crm/crmAdapter.js';
 import {
   buildNextTaskDedupeKey,
+  createCompletedTaskUpdatePayload,
   createNextCadenceTaskPayload,
   createNextTaskCreatedOutboundEvent,
   createPersonCadenceUpdatePayload,
@@ -66,6 +67,10 @@ export async function completeOutboundTaskWorkflow({
     taskId: normalized.taskId,
     transition
   });
+  const completedTask = buildCompletedTaskOperation({
+    taskId: normalized.taskId,
+    transition
+  });
   const nextTask = buildNextTaskOperation({
     person,
     personId: normalized.personId,
@@ -92,6 +97,7 @@ export async function completeOutboundTaskWorkflow({
   }
 
   const crmSync = await adapter.syncTaskCompletion({
+    completedTask,
     personUpdate,
     nextTask
   });
@@ -127,6 +133,7 @@ export async function completeOutboundTaskWorkflow({
     personId: normalized.personId,
     taskId: normalized.taskId,
     transition,
+    completedTask,
     personUpdate,
     nextTask,
     crmSync,
@@ -179,6 +186,16 @@ function buildPersonUpdateOperation({ personId, taskId, transition }) {
     id: personId,
     dedupeKey: `task-completion:person:${personId}:task:${taskId}:stage:${transition.newCadenceStage}`,
     payload: createPersonCadenceUpdatePayload({ transition })
+  };
+}
+
+function buildCompletedTaskOperation({ taskId, transition }) {
+  return {
+    object: 'task',
+    action: 'update',
+    id: taskId,
+    dedupeKey: `task-completion:completed-task:${taskId}:stage:${transition.newCadenceStage}`,
+    payload: createCompletedTaskUpdatePayload({ transition })
   };
 }
 
@@ -241,7 +258,9 @@ function createNextTaskEventFromCrmResult({
     return null;
   }
 
-  const taskOperation = crmSync.operations.find((operation) => operation.object === 'task');
+  const taskOperation = crmSync.operations.find(
+    (operation) => operation.object === 'task' && operation.dedupeKey === nextTask.dedupeKey
+  );
   const event = createNextTaskCreatedOutboundEvent({
     personId,
     taskId,

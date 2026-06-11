@@ -767,7 +767,8 @@ describe('outbound queue workflow', () => {
     const result = await getOutboundQueueWorkflow({
       queueSlug: 'follow-ups',
       query: {
-        ownerScope: 'all'
+        ownerScope: 'all',
+        dueBefore: '2026-06-30'
       },
       config: baseConfig,
       workspaceUser: adminUser,
@@ -833,6 +834,65 @@ describe('outbound queue workflow', () => {
         'initial_touch_already_sent',
         'open_follow_up_task'
       ])
+    });
+  });
+
+  it('prefers the current cadence task over an older still-open initial task', async () => {
+    const people = [
+      queueLead('people-current-task-selection', {
+        cadenceName: 'RELATIONSHIP_BUILDING_V1',
+        cadenceStage: 'INTRO_MESSAGE',
+        latestTouchStatus: 'SENT',
+        nextOutboundTouchDate: '2026-06-25'
+      })
+    ];
+    const tasks = [
+      queueTask('tasks-old-initial-still-open', {
+        personId: 'people-current-task-selection',
+        title: 'Send relationship-oriented connection request',
+        dueAt: '2026-05-27',
+        bodyV2: {
+          markdown: [
+            'Person ID: people-current-task-selection',
+            'Cadence: RELATIONSHIP_BUILDING_V1',
+            'Cadence stage: NOT_STARTED',
+            'Task type: CONNECTION_REQUEST'
+          ].join('\n')
+        }
+      }),
+      queueTask('tasks-current-intro', {
+        personId: 'people-current-task-selection',
+        title: 'Send contextual introduction',
+        dueAt: '2026-06-25',
+        bodyV2: {
+          markdown: [
+            'Source: Outbound cadence task completion',
+            'Person ID: people-current-task-selection',
+            'Cadence: RELATIONSHIP_BUILDING_V1',
+            'Next cadence stage: INTRO_MESSAGE',
+            'Task type: CONTEXTUAL_INTRODUCTION',
+            'Latest touch status: SENT'
+          ].join('\n')
+        }
+      })
+    ];
+    const result = await getOutboundQueueWorkflow({
+      queueSlug: 'follow-ups',
+      query: {
+        ownerScope: 'all',
+        dueBefore: '2026-06-30'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({ people, tasks }),
+      now: new Date('2026-06-11T15:00:00.000Z')
+    });
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]).toMatchObject({
+      personId: 'people-current-task-selection',
+      taskId: 'tasks-current-intro',
+      taskDueDate: '2026-06-25'
     });
   });
 

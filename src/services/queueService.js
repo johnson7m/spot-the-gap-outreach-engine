@@ -623,14 +623,14 @@ function buildCoverageExclusionReasons({
     return [];
   }
 
-  const review = getPipelineReview(person, firstOpenTask(tasks), tasks);
+  const review = getPipelineReview(person, firstOpenTask(tasks, person), tasks);
   const reasons = [...review.reasons];
 
   if (!person.outboundPipelineType || !person.cadenceName || !person.cadenceStage) {
     reasons.push('missing_outbound_fields');
   }
 
-  if (person.cadenceName && !isTerminalCadenceStage(person.cadenceStage) && !firstOpenTask(tasks)) {
+  if (person.cadenceName && !isTerminalCadenceStage(person.cadenceStage) && !firstOpenTask(tasks, person)) {
     reasons.push('missing_task');
   }
 
@@ -665,7 +665,7 @@ function getCoverageRecommendedFix({
     return 'define_queue_rule';
   }
 
-  const task = firstOpenTask(tasks);
+  const task = firstOpenTask(tasks, person);
   const diagnostic = buildPairClassificationDiagnostic({
     person,
     task,
@@ -794,7 +794,7 @@ function selectQueueCandidates({
         .filter((person) => isFreshLead(person, tasksByPersonId.get(person.personId)))
         .map((person) => {
           const personTasks = tasksByPersonId.get(person.personId) ?? [];
-          const task = firstOpenTask(personTasks);
+          const task = firstOpenTask(personTasks, person);
 
           return toClassifiedQueueItem({
             person,
@@ -856,7 +856,7 @@ function selectQueueCandidates({
         .filter(({ person, openTasks }) => isSentInitialFollowUpGap(person, openTasks))
         .map(({ person, openTasks }) => toClassifiedQueueItem({
           person,
-          task: firstOpenTask(openTasks),
+          task: firstOpenTask(openTasks, person),
           tasks: openTasks,
           source: 'twenty:person',
           itemWarnings: ['Initial touch appears sent, but no follow-up task exists.'],
@@ -889,7 +889,7 @@ function selectQueueCandidates({
 
           return toClassifiedQueueItem({
             person,
-            task: firstOpenTask(personTasks),
+            task: firstOpenTask(personTasks, person),
             tasks: personTasks,
             source: 'twenty:person',
             itemWarnings: [],
@@ -905,7 +905,7 @@ function selectQueueCandidates({
       return people
         .map((person) => ({
           person,
-          openTask: firstOpenTask(tasksByPersonId.get(person.personId)),
+          openTask: firstOpenTask(tasksByPersonId.get(person.personId), person),
           personTasks: tasksByPersonId.get(person.personId) ?? []
         }))
         .filter(({ person, openTask }) => isStaleRecovery(person, now, openTask))
@@ -935,7 +935,7 @@ function selectQueueCandidates({
 
         return people
           .map((person) => {
-            const openTask = firstOpenTask(tasksByPersonId.get(person.personId));
+            const openTask = firstOpenTask(tasksByPersonId.get(person.personId), person);
             const personTasks = tasksByPersonId.get(person.personId) ?? [];
             const review = getPipelineReview(person, openTask, personTasks);
 
@@ -1013,7 +1013,7 @@ function buildCurrentFinalQueueByPersonId({
       continue;
     }
 
-    const openTask = firstOpenTask(tasksByPersonId.get(person.personId));
+    const openTask = firstOpenTask(tasksByPersonId.get(person.personId), person);
     const personTasks = tasksByPersonId.get(person.personId) ?? [];
     const review = getPipelineReview(person, openTask, personTasks);
 
@@ -1321,7 +1321,7 @@ function applyRoleScope({ queueSlug, items, workspaceUser = {}, query, warnings 
 }
 
 function isFreshLead(person, tasks = []) {
-  const openTask = firstOpenTask(tasks);
+  const openTask = firstOpenTask(tasks, person);
 
   return (
     Boolean(person.outboundPipelineType) &&
@@ -1482,6 +1482,19 @@ function classifyFollowUpTask({ person, task, tasks = [] } = {}) {
       excludedReason: 'Initial touch is already marked SENT; create a post-initial follow-up task.',
       queueClassification: null,
       reasons: ['latest_touch_sent', 'initial_touch_already_sent', 'needs_next_follow_up_task']
+    };
+  }
+
+  if (
+    isPostInitialCadenceStage(person?.cadenceStage) &&
+    isInitialOutreachTask(task) &&
+    hasPostInitialFollowUpTask(tasks)
+  ) {
+    return {
+      include: false,
+      excludedReason: 'Initial outreach task is superseded by an open post-initial task.',
+      queueClassification: null,
+      reasons: ['excluded_superseded_initial_task', 'open_follow_up_task']
     };
   }
 
@@ -1850,7 +1863,7 @@ function getRecommendedClassificationFix({ person, task, tasks = [], diagnostic 
     return 'create_follow_up_task';
   }
 
-  if (person && isFreshLead(person, tasks) && !firstOpenTask(tasks)) {
+  if (person && isFreshLead(person, tasks) && !firstOpenTask(tasks, person)) {
     return 'create_first_task';
   }
 
@@ -1969,8 +1982,53 @@ function matchesTaskFilters(task, query = {}) {
   return true;
 }
 
-function firstOpenTask(tasks = []) {
-  return (tasks ?? []).filter(isOpenTask).sort(compareTasksByDueDate)[0] ?? null;
+function firstOpenTask(tasks = [], person = {}) {
+  return (tasks ?? []).filter(isOpenTask).sort((a, b) => compareOpenTasksForPerson(a, b, person))[0] ?? null;
+}
+
+function compareOpenTasksForPerson(left, right, person = {}) {
+  const leftScore = scoreOpenTaskForPerson(left, person);
+  const rightScore = scoreOpenTaskForPerson(right, person);
+
+  if (leftScore !== rightScore) {
+    return leftScore - rightScore;
+  }
+
+  return compareTasksByDueDate(left, right);
+}
+
+function scoreOpenTaskForPerson(task = {}, person = {}) {
+  let score = 100;
+  const personCadenceStage = normalizeSelect(person?.cadenceStage);
+  const taskCadenceStage = normalizeSelect(task?.cadenceStage);
+  const personNextTouchDate = normalizeDateString(person?.nextOutboundTouchDate);
+  const taskDueDate = normalizeDateString(task?.dueDate);
+
+  if (personCadenceStage && taskCadenceStage === personCadenceStage) {
+    score -= 35;
+  }
+
+  if (personNextTouchDate && taskDueDate === personNextTouchDate) {
+    score -= 25;
+  }
+
+  if (isPostInitialCadenceStage(personCadenceStage) && isPostInitialFollowUpTask(task)) {
+    score -= 20;
+  }
+
+  if (isFirstTouchAlreadySent(person) && isPostInitialFollowUpTask(task)) {
+    score -= 20;
+  }
+
+  if (isFirstTouchAlreadySent(person) && isInitialOutreachTask(task)) {
+    score += 40;
+  }
+
+  if (isPostInitialCadenceStage(personCadenceStage) && isInitialOutreachTask(task)) {
+    score += 30;
+  }
+
+  return score;
 }
 
 function isOpenTask(task) {
@@ -2128,7 +2186,7 @@ function getCompanyRecordName(company = {}) {
 }
 
 function buildFreshLeadWarnings(person, tasks) {
-  if (firstOpenTask(tasks)) {
+  if (firstOpenTask(tasks, person)) {
     return [];
   }
 

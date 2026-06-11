@@ -98,6 +98,28 @@ describe('cadence transition engine', () => {
       }
     });
   });
+
+  it('transitions Relationship Building from NOT_STARTED after first touch is sent', () => {
+    const transition = planCadenceTransition({
+      cadenceName: 'RELATIONSHIP_BUILDING_V1',
+      currentCadenceStage: 'NOT_STARTED',
+      completion: {
+        channel: 'LINKEDIN',
+        touchStatus: 'SENT'
+      },
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+
+    expect(transition).toMatchObject({
+      cadenceName: 'RELATIONSHIP_BUILDING_V1',
+      oldCadenceStage: 'NOT_STARTED',
+      newCadenceStage: 'INTRO_MESSAGE',
+      nextTask: {
+        title: 'Send contextual introduction',
+        taskType: 'CONTEXTUAL_INTRODUCTION'
+      }
+    });
+  });
 });
 
 describe('task completion workflow', () => {
@@ -130,7 +152,11 @@ describe('task completion workflow', () => {
       lastOutboundTouchDate: '2026-06-03',
       nextOutboundTouchDate: '2026-06-05'
     });
-    expect(result.crmSync.operations.filter((operation) => operation.object === 'task')).toHaveLength(1);
+    expect(result.completedTask.payload).toMatchObject({
+      status: 'DONE',
+      completedAt: '2026-06-03T15:00:00.000Z'
+    });
+    expect(result.crmSync.operations.filter((operation) => operation.object === 'task')).toHaveLength(2);
     expect(result.nextTask.payload.bodyV2.markdown).toContain('Person ID: people-1');
     expect(result.nextTask.payload.bodyV2.markdown).toContain(`Dedupe key: ${result.nextTask.dedupeKey}`);
 
@@ -139,7 +165,7 @@ describe('task completion workflow', () => {
       'task_completed',
       'next_task_created'
     ]);
-    expect(snapshot.crmSyncLogs.map((log) => log.objectName)).toEqual(['person', 'task']);
+    expect(snapshot.crmSyncLogs.map((log) => log.objectName)).toEqual(['task', 'person', 'task']);
   });
 
   it('records duplicate next task avoidance when the CRM skips an existing task', async () => {
@@ -156,7 +182,7 @@ describe('task completion workflow', () => {
     });
 
     expect(result.status).toBe('succeeded');
-    expect(result.crmSync.operations.find((operation) => operation.object === 'task')).toMatchObject({
+    expect(result.crmSync.operations.find((operation) => operation.dedupeKey === result.nextTask.dedupeKey)).toMatchObject({
       action: 'skip_existing',
       status: 'skipped',
       dedupeKey: result.nextTask.dedupeKey
@@ -201,7 +227,7 @@ describe('task completion workflow', () => {
         }
       })
     ]);
-    expect(result.crmSync.operations.map((operation) => operation.object)).toEqual(['person', 'task']);
+    expect(result.crmSync.operations.map((operation) => operation.object)).toEqual(['task', 'person', 'task']);
   });
 
   it('does not create a next task for terminal cadence stages', async () => {
@@ -231,7 +257,7 @@ describe('task completion workflow', () => {
       terminal: true
     });
     expect(result.nextTask).toBeNull();
-    expect(result.crmSync.operations.map((operation) => operation.object)).toEqual(['person']);
+    expect(result.crmSync.operations.map((operation) => operation.object)).toEqual(['task', 'person']);
   });
 });
 
@@ -277,6 +303,11 @@ describe('task completion API auth', () => {
           newCadenceStage: 'INTRO_MESSAGE'
         },
         crmResults: [
+          {
+            object: 'task',
+            action: 'update',
+            status: 'succeeded'
+          },
           {
             object: 'person',
             status: 'succeeded'
@@ -427,8 +458,21 @@ function createFakeTaskCompletionCrmAdapter({
       return person;
     },
 
-    async syncTaskCompletion({ personUpdate, nextTask }) {
+    async syncTaskCompletion({ completedTask, personUpdate, nextTask }) {
       const operations = [
+        {
+          object: 'task',
+          action: 'update',
+          status: 'succeeded',
+          id: completedTask.id,
+          dedupeKey: completedTask.dedupeKey,
+          payload: completedTask.payload,
+          response: {
+            id: completedTask.id,
+            ...completedTask.payload
+          },
+          attempts: 1
+        },
         {
           object: 'person',
           action: 'update',

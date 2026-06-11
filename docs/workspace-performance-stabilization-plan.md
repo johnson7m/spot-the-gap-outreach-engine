@@ -345,6 +345,50 @@ Safety rules:
 - Serve queue counts and reporting Phase 1 metrics from the same snapshot.
 - Add explicit snapshot refresh semantics.
 
+### Priority 3A: Persisted Snapshot
+
+The current snapshot layer is intentionally read-only and in-memory. It reduces
+duplicate full Twenty reads while the Render process is warm, but it does not
+survive a deploy, restart, or process eviction.
+
+Before co-founder launch, add a Supabase-backed persisted snapshot layer:
+
+```text
+workspace_snapshots
+  id
+  snapshot_version
+  generated_at
+  expires_at
+  source_read_status
+  read_duration_ms
+  counts_by_object_type jsonb
+  queue_summary jsonb
+  coverage_summary jsonb
+  reporting_summary jsonb
+  classification_records jsonb
+  warnings jsonb
+  created_at
+```
+
+Phase 1 should persist metadata, counts, queue summary, coverage summary, and
+classification output. If the full source snapshot is too large for routine
+reads, keep source records in memory only and rebuild from Twenty on refresh.
+
+Rules:
+
+- never persist API keys, bearer tokens, service-role keys, or raw secrets
+- persist snapshot version so future schema changes are detectable
+- memory cache remains the fastest layer
+- Supabase provides last-known snapshot metadata after Render restarts
+- `POST /api/workspace/snapshot/refresh` rebuilds read-only data and persists
+  the latest successful snapshot
+- write workflows mark the snapshot stale and may persist stale metadata
+- queue/reporting responses can say `stale_persisted_snapshot` if Twenty is
+  rate-limited and memory is empty
+
+Do not make write/apply workflows depend on persisted snapshots. Writes must
+continue rechecking live CRM state or workflow-specific source data.
+
 ### Priority 4: Admin Preview and Registration
 
 - Add admin-only local user/role preview.

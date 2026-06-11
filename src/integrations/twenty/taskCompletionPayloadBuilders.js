@@ -14,6 +14,13 @@ export function createPersonCadenceUpdatePayload({ transition }) {
   return payload;
 }
 
+export function createCompletedTaskUpdatePayload({ transition }) {
+  return {
+    status: 'DONE',
+    completedAt: transition.completedAt
+  };
+}
+
 export function createNextCadenceTaskPayload({
   person,
   personId,

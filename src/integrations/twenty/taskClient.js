@@ -2,6 +2,10 @@ export function createTaskClient({ dryRun = true, log, restClient } = {}) {
   return {
     async createTask(operation) {
       return executeOperation({ ...operation, object: 'task', dryRun, log, restClient });
+    },
+
+    async updateTaskById(operation) {
+      return executeUpdateOperation({ ...operation, object: 'task', dryRun, log, restClient });
     }
   };
 }
@@ -42,6 +46,36 @@ async function executeOperation({ action, dedupeKey, payload, dryRun, log, restC
   return {
     object: 'task',
     action: 'create',
+    status: 'succeeded',
+    dedupeKey,
+    payload,
+    response
+  };
+}
+
+async function executeUpdateOperation({ action, id, dedupeKey, payload, dryRun, log, restClient }) {
+  if (dryRun) {
+    log?.info({ object: 'task', action, id, dedupeKey }, 'Twenty Task dry-run update planned');
+    return {
+      object: 'task',
+      action,
+      id,
+      status: 'dry_run',
+      dedupeKey,
+      payload
+    };
+  }
+
+  if (!restClient) {
+    throw new Error('Twenty REST client is required for live Task writes.');
+  }
+
+  const response = await restClient.updateRecord('tasks', id, payload);
+
+  return {
+    object: 'task',
+    action,
+    id,
     status: 'succeeded',
     dedupeKey,
     payload,

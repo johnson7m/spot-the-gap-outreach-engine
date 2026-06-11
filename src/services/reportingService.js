@@ -342,6 +342,11 @@ export function buildRepPerformanceReporting({
       startDate: dateRange.startDate.toISOString(),
       endDate: dateRange.endDate.toISOString()
     },
+    performanceBaseline: {
+      baselineDate: query.performanceBaselineDate ?? null,
+      applied: query.performanceBaselineApplied === true,
+      includeAllTime: query.includeAllTime === true || String(query.includeAllTime ?? '').toLowerCase() === 'true'
+    },
     metrics: {
       totals: sumRepMetrics(reps.map((rep) => rep.metrics)),
       reps

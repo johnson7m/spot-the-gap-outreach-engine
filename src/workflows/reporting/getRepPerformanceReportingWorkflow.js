@@ -19,9 +19,13 @@ export async function getRepPerformanceReportingWorkflow({
   requestSource,
   now = new Date()
 } = {}) {
+  const effectiveQuery = applyPerformanceBaseline({
+    query,
+    baselineDate: config.reporting?.performanceBaselineDate
+  });
   const { records, source, readStatus, warnings, isCriticalDegraded, snapshotMetadata } =
     await loadReportingSourceRecords({
-      query,
+      query: effectiveQuery,
       config,
       log,
       workspaceUser,
@@ -34,7 +38,7 @@ export async function getRepPerformanceReportingWorkflow({
       }
     });
   const activity = await loadReportingActivityRecords({
-    query,
+    query: effectiveQuery,
     config,
     activitySource,
     supabaseClient
@@ -61,7 +65,7 @@ export async function getRepPerformanceReportingWorkflow({
     crmSyncLogs: activity.crmSyncLogs,
     assessmentSubmissions: activity.assessmentSubmissions,
     workspaceUser,
-    query,
+    query: effectiveQuery,
     now
   });
 
@@ -72,4 +76,25 @@ export async function getRepPerformanceReportingWorkflow({
     warnings: combinedWarnings,
     snapshot: snapshotMetadata
   });
+}
+
+function applyPerformanceBaseline({ query = {}, baselineDate } = {}) {
+  if (!baselineDate || isTruthy(query.includeAllTime) || query.startDate || query.from || query.since) {
+    return query;
+  }
+
+  return {
+    ...query,
+    startDate: baselineDate,
+    performanceBaselineDate: baselineDate,
+    performanceBaselineApplied: true
+  };
+}
+
+function isTruthy(value) {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  return ['1', 'true', 'yes', 'on'].includes(String(value ?? '').toLowerCase());
 }

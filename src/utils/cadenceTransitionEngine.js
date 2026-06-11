@@ -1,5 +1,13 @@
 const CADENCE_TRANSITIONS = {
   ASSESSMENT_CAMPAIGN_V1: {
+    NOT_STARTED: {
+      nextStage: 'ASSESSMENT_POSITIONING',
+      nextTask: {
+        taskType: 'ASSESSMENT_POSITIONING_MESSAGE',
+        title: 'Send assessment positioning follow-up',
+        dueInDays: 2
+      }
+    },
     CONNECTION_REQUEST: {
       nextStage: 'INTRO_MESSAGE',
       nextTask: {
@@ -37,6 +45,14 @@ const CADENCE_TRANSITIONS = {
     }
   },
   RELATIONSHIP_BUILDING_V1: {
+    NOT_STARTED: {
+      nextStage: 'INTRO_MESSAGE',
+      nextTask: {
+        taskType: 'CONTEXTUAL_INTRODUCTION',
+        title: 'Send contextual introduction',
+        dueInDays: 2
+      }
+    },
     CONNECTION_REQUEST: {
       nextStage: 'INTRO_MESSAGE',
       nextTask: {
@@ -96,6 +112,11 @@ export function planCadenceTransition({
     );
     error.code = 'CADENCE_TRANSITION_NOT_FOUND';
     error.statusCode = 422;
+    error.details = {
+      cadenceName: normalizedCadenceName || null,
+      currentCadenceStage: oldCadenceStage || null,
+      supportedStages: Object.keys(CADENCE_TRANSITIONS[normalizedCadenceName] ?? {})
+    };
     throw error;
   }
 
