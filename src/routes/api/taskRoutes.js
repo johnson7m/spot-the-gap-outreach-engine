@@ -152,6 +152,10 @@ function toTaskCompletionResponse(result) {
     personId: result.personId,
     taskId: result.taskId,
     transition: result.transition,
+    completedTaskUpdate: result.completedTask,
+    completedTaskVerification: result.crmSync.operations.find(
+      (operation) => operation.object === 'task' && operation.action === 'verify_completed_status'
+    ) ?? null,
     personUpdate: result.personUpdate,
     nextTask: result.nextTask,
     crmResults: result.crmSync.operations.map((operation) => ({
@@ -202,6 +206,14 @@ function buildTaskCompletionWarnings(result) {
     if (operation.status === 'failed') {
       warnings.push(
         `Relationship ${operation.key} failed: ${operation.error?.message ?? 'Unknown error'}`
+      );
+    }
+  }
+
+  for (const operation of result.crmSync.operations ?? []) {
+    if (operation.status === 'failed') {
+      warnings.push(
+        `${operation.object} ${operation.action} failed: ${operation.error?.message ?? 'Unknown error'}`
       );
     }
   }

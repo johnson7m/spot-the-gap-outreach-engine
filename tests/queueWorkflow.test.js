@@ -8,7 +8,8 @@ import {
 import { handleQueueFetch, handleQueueSummaryFetch } from '../src/routes/api/queueRoutes.js';
 import {
   buildQueueClassificationDiagnostics,
-  buildQueueCoverageAudit
+  buildQueueCoverageAudit,
+  buildStalePriorStageTaskCleanupPlan
 } from '../src/services/queueService.js';
 import { processAssessmentSubmission } from '../src/workflows/assessmentWorkflow.js';
 import {
@@ -892,7 +893,110 @@ describe('outbound queue workflow', () => {
     expect(result.items[0]).toMatchObject({
       personId: 'people-current-task-selection',
       taskId: 'tasks-current-intro',
-      taskDueDate: '2026-06-25'
+      taskDueDate: '2026-06-25',
+      warnings: expect.arrayContaining([
+        '1 prior-stage open task remains and is excluded from current queue selection.'
+      ])
+    });
+  });
+
+  it('does not use a prior-stage open task as the current follow-up task after Person advancement', async () => {
+    const people = [
+      queueLead('people-prior-stage-only', {
+        cadenceName: 'RELATIONSHIP_BUILDING_V1',
+        cadenceStage: 'INTRO_MESSAGE',
+        latestTouchStatus: 'SENT',
+        nextOutboundTouchDate: '2026-06-13'
+      })
+    ];
+    const tasks = [
+      queueTask('tasks-prior-stage-only', {
+        personId: 'people-prior-stage-only',
+        title: 'Send relationship-oriented connection request',
+        dueAt: '2026-06-09',
+        bodyV2: {
+          markdown: [
+            'Person ID: people-prior-stage-only',
+            'Cadence: RELATIONSHIP_BUILDING_V1',
+            'Cadence stage: NOT_STARTED',
+            'Task type: CONNECTION_REQUEST'
+          ].join('\n')
+        }
+      })
+    ];
+    const followUps = await getOutboundQueueWorkflow({
+      queueSlug: 'follow-ups',
+      query: {
+        ownerScope: 'all',
+        dueBefore: '2026-06-30'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({ people, tasks }),
+      now: new Date('2026-06-11T15:00:00.000Z')
+    });
+    const pipelineReview = await getOutboundQueueWorkflow({
+      queueSlug: 'pipeline-review',
+      query: {
+        ownerScope: 'all'
+      },
+      config: baseConfig,
+      workspaceUser: adminUser,
+      dataSource: fakeQueueDataSource({ people, tasks }),
+      now: new Date('2026-06-11T15:00:00.000Z')
+    });
+
+    expect(followUps.items).toHaveLength(0);
+    expect(pipelineReview.items[0]).toMatchObject({
+      personId: 'people-prior-stage-only',
+      taskId: null,
+      reviewReasons: expect.arrayContaining(['stale_prior_stage_task', 'missing_next_task']),
+      warnings: expect.arrayContaining([
+        '1 prior-stage open task remains TODO/open after cadence advancement.'
+      ])
+    });
+  });
+
+  it('plans stale prior-stage task cleanup candidates without writing', () => {
+    const people = [
+      queueLead('people-prior-stage-plan', {
+        cadenceName: 'RELATIONSHIP_BUILDING_V1',
+        cadenceStage: 'INTRO_MESSAGE',
+        latestTouchStatus: 'SENT',
+        nextOutboundTouchDate: '2026-06-13'
+      })
+    ];
+    const tasks = [
+      queueTask('tasks-prior-stage-plan', {
+        personId: 'people-prior-stage-plan',
+        title: 'Send relationship-oriented connection request',
+        dueAt: '2026-06-09',
+        bodyV2: {
+          markdown: [
+            'Person ID: people-prior-stage-plan',
+            'Cadence: RELATIONSHIP_BUILDING_V1',
+            'Cadence stage: NOT_STARTED',
+            'Task type: CONNECTION_REQUEST'
+          ].join('\n')
+        }
+      })
+    ];
+    const plan = buildStalePriorStageTaskCleanupPlan({
+      people,
+      tasks,
+      now: new Date('2026-06-11T15:00:00.000Z')
+    });
+
+    expect(plan.summary).toMatchObject({
+      stalePriorStageTasks: 1,
+      peopleAffected: 1
+    });
+    expect(plan.records[0]).toMatchObject({
+      personId: 'people-prior-stage-plan',
+      staleTaskId: 'tasks-prior-stage-plan',
+      personCadenceStage: 'INTRO_MESSAGE',
+      staleTaskCadenceStage: 'NOT_STARTED',
+      safeToPlan: true
     });
   });
 

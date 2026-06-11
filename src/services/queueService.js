@@ -51,6 +51,24 @@ const POST_INITIAL_CADENCE_STAGES = new Set([
   'STRATEGIC_CHECK_IN',
   'DISCOVERY_ASK'
 ]);
+const CADENCE_STAGE_ORDER = {
+  RELATIONSHIP_BUILDING_V1: [
+    'NOT_STARTED',
+    'CONNECTION_REQUEST',
+    'INTRO_MESSAGE',
+    'VALUE_TOUCH',
+    'STRATEGIC_CHECK_IN',
+    'DISCOVERY_ASK'
+  ],
+  ASSESSMENT_CAMPAIGN_V1: [
+    'NOT_STARTED',
+    'CONNECTION_REQUEST',
+    'INTRO_MESSAGE',
+    'ASSESSMENT_POSITIONING',
+    'ASSESSMENT_SENT',
+    'ASSESSMENT_CHECK_IN'
+  ]
+};
 const STALE_RISK_VALUES = new Set(['STALE', 'HIGH']);
 const EXPLICIT_STALE_FLAGS = new Set(['STALE', 'TRUE', 'YES', 'NEEDS_STALE_RECOVERY']);
 const STALE_NO_RESPONSE_DAY_THRESHOLD = 30;
@@ -357,6 +375,79 @@ export function buildQueueCoverageAudit({
       includeTestRecords: true
     },
     summary,
+    records
+  };
+}
+
+export function buildStalePriorStageTaskCleanupPlan({
+  people = [],
+  companies = [],
+  tasks = [],
+  taskTargets = [],
+  workspaceMembers = [],
+  now = new Date()
+} = {}) {
+  const workspaceMembersById = createWorkspaceMemberIndex(workspaceMembers);
+  const companiesById = createCompanyIndex(companies);
+  const taskTargetsByTaskId = groupTaskTargetsByTaskId(taskTargets);
+  const normalizedTasks = tasks.map((task) =>
+    normalizeTaskRecord({
+      task,
+      taskTargets: taskTargetsByTaskId.get(String(task.id ?? '')) ?? [],
+      people,
+      workspaceMembersById
+    })
+  );
+  const tasksByPersonId = groupTasksByPersonId(normalizedTasks);
+  const normalizedPeople = people.map((person) =>
+    normalizePersonRecord({
+      person,
+      tasks: tasksByPersonId.get(String(person.id ?? '')) ?? [],
+      companiesById,
+      workspaceMembersById
+    })
+  );
+  const records = [];
+
+  for (const person of normalizedPeople) {
+    const personTasks = tasksByPersonId.get(person.personId) ?? [];
+    const staleTasks = getStalePriorStageTasks(person, personTasks);
+    const currentTask = firstOpenTask(personTasks, person);
+
+    for (const task of staleTasks) {
+      records.push({
+        personId: person.personId,
+        personName: person.name,
+        owner: person.owner,
+        cadenceName: person.cadenceName,
+        personCadenceStage: person.cadenceStage,
+        nextOutboundTouchDate: person.nextOutboundTouchDate,
+        latestTouchStatus: person.latestTouchStatus,
+        staleTaskId: task.taskId,
+        staleTaskTitle: task.title,
+        staleTaskStatus: task.status,
+        staleTaskDueDate: task.dueDate,
+        staleTaskCadenceStage: task.cadenceStage,
+        currentQueueTaskId: currentTask?.taskId ?? null,
+        currentQueueTaskTitle: currentTask?.title ?? null,
+        currentQueueTaskDueDate: currentTask?.dueDate ?? null,
+        recommendedAction: 'close_or_review_prior_stage_task',
+        safeToPlan: true,
+        warnings: [
+          'Task is still open but belongs to a prior cadence stage and is excluded from current queue selection.'
+        ]
+      });
+    }
+  }
+
+  return {
+    generatedAt: now.toISOString(),
+    summary: {
+      totalPeople: normalizedPeople.length,
+      totalTasks: normalizedTasks.length,
+      stalePriorStageTasks: records.length,
+      peopleAffected: new Set(records.map((record) => record.personId)).size
+    },
     records
   };
 }
@@ -812,7 +903,7 @@ function selectQueueCandidates({
         });
 
     case 'follow-ups': {
-      const taskItems = filterFollowUpTasks({
+      const rawTaskItems = filterFollowUpTasks({
         tasks,
         query,
         hiddenTestPersonIds,
@@ -846,6 +937,11 @@ function selectQueueCandidates({
         })
         .filter(Boolean)
         .filter((item) => item.cadenceName && !isTerminalCadenceStage(item.cadenceStage));
+      const taskItems = dedupeFollowUpItemsByCurrentTask({
+        items: rawTaskItems,
+        people,
+        tasksByPersonId
+      });
       const taskItemPersonIds = new Set(taskItems.map((item) => item.personId).filter(Boolean));
       const gapItems = people
         .filter((person) => !taskItemPersonIds.has(person.personId))
@@ -1025,6 +1121,53 @@ function buildCurrentFinalQueueByPersonId({
   return finalQueueByPersonId;
 }
 
+function dedupeFollowUpItemsByCurrentTask({ items = [], people = [], tasksByPersonId = new Map() } = {}) {
+  const itemsByPersonId = new Map();
+  const passthrough = [];
+
+  for (const item of items) {
+    if (!item.personId) {
+      passthrough.push(item);
+      continue;
+    }
+
+    const existing = itemsByPersonId.get(item.personId) ?? [];
+    existing.push(item);
+    itemsByPersonId.set(item.personId, existing);
+  }
+
+  const selected = [];
+
+  for (const [personId, personItems] of itemsByPersonId.entries()) {
+    if (personItems.length === 1) {
+      selected.push(personItems[0]);
+      continue;
+    }
+
+    const person = people.find((candidate) => candidate.personId === personId);
+    const currentTask = firstOpenTask(tasksByPersonId.get(personId) ?? [], person);
+    const currentItem = currentTask
+      ? personItems.find((item) => item.taskId === currentTask.taskId)
+      : null;
+    const fallbackItem = personItems
+      .slice()
+      .sort((left, right) => compareTasksByDueDate(
+        { dueDate: left.taskDueDate },
+        { dueDate: right.taskDueDate }
+      ))[0];
+
+    selected.push({
+      ...(currentItem ?? fallbackItem),
+      warnings: uniqueStrings([
+        ...((currentItem ?? fallbackItem)?.warnings ?? []),
+        `${personItems.length - 1} additional open follow-up task${personItems.length - 1 === 1 ? '' : 's'} hidden for this Person; current task selected by cadence/date.`
+      ])
+    });
+  }
+
+  return [...selected, ...passthrough];
+}
+
 function normalizePersonRecord({
   person = {},
   tasks = [],
@@ -1146,6 +1289,7 @@ function toClassifiedQueueItem({
     ...item,
     person,
     task,
+    tasks,
     now,
     queueCandidates: classification,
     classificationDiagnostics: query.includeDiagnostics ? classification : null
@@ -1155,6 +1299,7 @@ function toClassifiedQueueItem({
 function toQueueItem({
   person,
   task,
+  tasks = [],
   source,
   itemWarnings = [],
   suggestedResolutionActions = [],
@@ -1235,6 +1380,7 @@ function toQueueItem({
     warnings: uniqueStrings([
       ...(person?.taskWarnings ?? []),
       ...(task?.warnings ?? []),
+      ...buildStalePriorStageTaskWarnings(person, tasks),
       ...itemWarnings
     ])
   };
@@ -1473,6 +1619,15 @@ function classifyFollowUpTask({ person, task, tasks = [] } = {}) {
       include: true,
       queueClassification: 'follow_up_after_initial_sent',
       reasons: ['latest_touch_sent', 'initial_touch_already_sent', 'open_follow_up_task']
+    };
+  }
+
+  if (isStalePriorStageTask(person, task)) {
+    return {
+      include: false,
+      excludedReason: 'Task belongs to a prior cadence stage and is older than the Person current next touch date.',
+      queueClassification: null,
+      reasons: ['stale_prior_stage_task']
     };
   }
 
@@ -1823,6 +1978,13 @@ function getPipelineReview(person, openTask, tasks = []) {
     suggestedResolutionActions.push('create_first_task');
   }
 
+  const stalePriorStageTasks = getStalePriorStageTasks(person, tasks);
+  if (stalePriorStageTasks.length > 0) {
+    warnings.push(`${stalePriorStageTasks.length} prior-stage open task remains TODO/open after cadence advancement.`);
+    reasons.push('stale_prior_stage_task');
+    suggestedResolutionActions.push('review_stale_prior_stage_task');
+  }
+
   if (isSentInitialFollowUpGap(person, tasks)) {
     warnings.push('Initial touch appears sent, but no follow-up task exists.');
     reasons.push('missing_follow_up_task');
@@ -1983,7 +2145,10 @@ function matchesTaskFilters(task, query = {}) {
 }
 
 function firstOpenTask(tasks = [], person = {}) {
-  return (tasks ?? []).filter(isOpenTask).sort((a, b) => compareOpenTasksForPerson(a, b, person))[0] ?? null;
+  return (tasks ?? [])
+    .filter(isOpenTask)
+    .filter((task) => !isStalePriorStageTask(person, task))
+    .sort((a, b) => compareOpenTasksForPerson(a, b, person))[0] ?? null;
 }
 
 function compareOpenTasksForPerson(left, right, person = {}) {
@@ -2009,7 +2174,11 @@ function scoreOpenTaskForPerson(task = {}, person = {}) {
   }
 
   if (personNextTouchDate && taskDueDate === personNextTouchDate) {
-    score -= 25;
+    score -= 90;
+  }
+
+  if (personNextTouchDate && taskDueDate && taskDueDate < personNextTouchDate) {
+    score += 25;
   }
 
   if (isPostInitialCadenceStage(personCadenceStage) && isPostInitialFollowUpTask(task)) {
@@ -2029,6 +2198,62 @@ function scoreOpenTaskForPerson(task = {}, person = {}) {
   }
 
   return score;
+}
+
+export function getStalePriorStageTasks(person = {}, tasks = []) {
+  return (tasks ?? []).filter((task) => isStalePriorStageTask(person, task));
+}
+
+export function isStalePriorStageTask(person = {}, task = {}) {
+  if (!person || !task || !isOpenTask(task)) {
+    return false;
+  }
+
+  const personCadenceName = normalizeSelect(person.cadenceName ?? task.cadenceName);
+  const personStage = normalizeSelect(person.cadenceStage);
+  const taskStage = normalizeSelect(task.cadenceStage);
+  const personNextTouchDate = normalizeDateInput(person.nextOutboundTouchDate);
+  const taskDueDate = normalizeDateInput(task.dueDate);
+
+  if (!personStage || !taskStage || personStage === taskStage) {
+    return false;
+  }
+
+  const taskIsBehind = isTaskStageBehindPersonStage({
+    cadenceName: personCadenceName,
+    taskStage,
+    personStage
+  });
+  const dueOlderThanNextTouch =
+    taskDueDate && personNextTouchDate
+      ? taskDueDate.getTime() < personNextTouchDate.getTime()
+      : false;
+  const initialBehindPostInitial =
+    isInitialOutreachTask(task) && isPostInitialCadenceStage(personStage);
+
+  return taskIsBehind && (dueOlderThanNextTouch || initialBehindPostInitial);
+}
+
+function buildStalePriorStageTaskWarnings(person = {}, tasks = []) {
+  const staleTasks = getStalePriorStageTasks(person, tasks);
+
+  if (staleTasks.length === 0) {
+    return [];
+  }
+
+  return [
+    `${staleTasks.length} prior-stage open task remains and is excluded from current queue selection.`
+  ];
+}
+
+function isTaskStageBehindPersonStage({ cadenceName, taskStage, personStage }) {
+  const orderedStages = CADENCE_STAGE_ORDER[cadenceName] ?? [
+    ...new Set(Object.values(CADENCE_STAGE_ORDER).flat())
+  ];
+  const taskIndex = orderedStages.indexOf(taskStage);
+  const personIndex = orderedStages.indexOf(personStage);
+
+  return taskIndex >= 0 && personIndex >= 0 && taskIndex < personIndex;
 }
 
 function isOpenTask(task) {

@@ -4,8 +4,9 @@ import { inspectTaskCompletionReadinessWorkflow } from '../src/workflows/outboun
 
 async function main() {
   const config = loadConfig();
-  const taskId = process.env.TASK_ID;
-  const personId = process.env.PERSON_ID;
+  const args = parseArgs(process.argv.slice(2));
+  const taskId = args.taskId ?? process.env.TASK_ID;
+  const personId = args.personId ?? process.env.PERSON_ID;
 
   if (!taskId || !personId) {
     console.error('TASK_ID and PERSON_ID are required.');
@@ -36,7 +37,28 @@ async function main() {
   }
 }
 
+function parseArgs(args = []) {
+  return args.reduce((acc, arg, index) => {
+    if (arg.startsWith('--task-id=')) {
+      acc.taskId = arg.slice('--task-id='.length);
+    } else if (arg === '--task-id') {
+      acc.taskId = args[index + 1];
+    } else if (arg.startsWith('--person-id=')) {
+      acc.personId = arg.slice('--person-id='.length);
+    } else if (arg === '--person-id') {
+      acc.personId = args[index + 1];
+    }
+
+    return acc;
+  }, {});
+}
+
 main().catch((error) => {
-  console.error(error);
+  console.error(JSON.stringify({
+    message: error.message,
+    code: error.code,
+    status: error.response?.status,
+    responseBody: error.response?.data
+  }, null, 2));
   process.exitCode = 1;
 });

@@ -152,11 +152,10 @@ describe('task completion workflow', () => {
       lastOutboundTouchDate: '2026-06-03',
       nextOutboundTouchDate: '2026-06-05'
     });
-    expect(result.completedTask.payload).toMatchObject({
-      status: 'DONE',
-      completedAt: '2026-06-03T15:00:00.000Z'
+    expect(result.completedTask.payload).toEqual({
+      status: 'DONE'
     });
-    expect(result.crmSync.operations.filter((operation) => operation.object === 'task')).toHaveLength(2);
+    expect(result.crmSync.operations.filter((operation) => operation.object === 'task')).toHaveLength(3);
     expect(result.nextTask.payload.bodyV2.markdown).toContain('Person ID: people-1');
     expect(result.nextTask.payload.bodyV2.markdown).toContain(`Dedupe key: ${result.nextTask.dedupeKey}`);
 
@@ -165,7 +164,7 @@ describe('task completion workflow', () => {
       'task_completed',
       'next_task_created'
     ]);
-    expect(snapshot.crmSyncLogs.map((log) => log.objectName)).toEqual(['task', 'person', 'task']);
+    expect(snapshot.crmSyncLogs.map((log) => log.objectName)).toEqual(['task', 'task', 'person', 'task']);
   });
 
   it('records duplicate next task avoidance when the CRM skips an existing task', async () => {
@@ -227,7 +226,7 @@ describe('task completion workflow', () => {
         }
       })
     ]);
-    expect(result.crmSync.operations.map((operation) => operation.object)).toEqual(['task', 'person', 'task']);
+    expect(result.crmSync.operations.map((operation) => operation.object)).toEqual(['task', 'task', 'person', 'task']);
   });
 
   it('does not create a next task for terminal cadence stages', async () => {
@@ -257,7 +256,53 @@ describe('task completion workflow', () => {
       terminal: true
     });
     expect(result.nextTask).toBeNull();
-    expect(result.crmSync.operations.map((operation) => operation.object)).toEqual(['task', 'person']);
+    expect(result.crmSync.operations.map((operation) => operation.object)).toEqual(['task', 'task', 'person']);
+  });
+
+  it('returns partial failure when completed Task status verification fails', async () => {
+    const result = await completeOutboundTaskWorkflow({
+      input: taskCompletionInput(),
+      config: baseConfig,
+      workspaceUser,
+      crmAdapter: createFakeTaskCompletionCrmAdapter({
+        person: personRecord(),
+        completedTaskVerificationStatus: 'failed'
+      }),
+      correlationId: 'task-completion-test-verification-failure',
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+
+    expect(result.status).toBe('partial_failure');
+    expect(result.crmSync.operations).toContainEqual(
+      expect.objectContaining({
+        object: 'task',
+        action: 'verify_completed_status',
+        status: 'failed'
+      })
+    );
+  });
+
+  it('returns partial failure when completed Task status update fails', async () => {
+    const result = await completeOutboundTaskWorkflow({
+      input: taskCompletionInput(),
+      config: baseConfig,
+      workspaceUser,
+      crmAdapter: createFakeTaskCompletionCrmAdapter({
+        person: personRecord(),
+        completedTaskOperationStatus: 'failed'
+      }),
+      correlationId: 'task-completion-test-update-failure',
+      now: new Date('2026-06-03T15:00:00.000Z')
+    });
+
+    expect(result.status).toBe('partial_failure');
+    expect(result.crmSync.operations).toContainEqual(
+      expect.objectContaining({
+        object: 'task',
+        action: 'update',
+        status: 'failed'
+      })
+    );
   });
 });
 
@@ -306,6 +351,11 @@ describe('task completion API auth', () => {
           {
             object: 'task',
             action: 'update',
+            status: 'succeeded'
+          },
+          {
+            object: 'task',
+            action: 'verify_completed_status',
             status: 'succeeded'
           },
           {
@@ -449,6 +499,8 @@ function createMockExchange({ body = {}, headers = {}, params = {} } = {}) {
 
 function createFakeTaskCompletionCrmAdapter({
   person,
+  completedTaskOperationStatus = 'succeeded',
+  completedTaskVerificationStatus = 'succeeded',
   taskOperationStatus = 'succeeded',
   relationshipResults = []
 } = {}) {
@@ -463,7 +515,7 @@ function createFakeTaskCompletionCrmAdapter({
         {
           object: 'task',
           action: 'update',
-          status: 'succeeded',
+          status: completedTaskOperationStatus,
           id: completedTask.id,
           dedupeKey: completedTask.dedupeKey,
           payload: completedTask.payload,
@@ -471,7 +523,36 @@ function createFakeTaskCompletionCrmAdapter({
             id: completedTask.id,
             ...completedTask.payload
           },
-          attempts: 1
+          attempts: 1,
+          ...(completedTaskOperationStatus === 'failed'
+            ? {
+                error: {
+                  message: 'Task status update failed in test.'
+                }
+              }
+            : {})
+        },
+        {
+          object: 'task',
+          action: 'verify_completed_status',
+          status: completedTaskVerificationStatus,
+          id: completedTask.id,
+          dedupeKey: `${completedTask.dedupeKey}:verify`,
+          payload: {
+            expectedStatus: 'DONE'
+          },
+          response: {
+            id: completedTask.id,
+            status: completedTaskVerificationStatus === 'failed' ? 'TODO' : 'DONE'
+          },
+          attempts: 1,
+          ...(completedTaskVerificationStatus === 'failed'
+            ? {
+                error: {
+                  message: 'Completed Task verification failed in test.'
+                }
+              }
+            : {})
         },
         {
           object: 'person',
@@ -518,7 +599,7 @@ function createFakeTaskCompletionCrmAdapter({
 
       return {
         provider: 'twenty',
-        status: 'succeeded',
+        status: operations.some((operation) => operation.status === 'failed') ? 'partial_failure' : 'succeeded',
         dryRun: false,
         operations,
         relationshipResults,

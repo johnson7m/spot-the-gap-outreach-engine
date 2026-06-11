@@ -756,11 +756,35 @@ Useful docs:
 Task completion diagnostics:
 
 ```bash
-TASK_ID=<twenty-task-id> PERSON_ID=<twenty-person-id> npm run tasks:inspect-completion-readiness
+npm run tasks:inspect-completion-readiness -- --task-id=<twenty-task-id> --person-id=<twenty-person-id>
 ```
 
 The diagnostic is read-only. It resolves the Person/Task cadence context and
 previews whether `POST /api/tasks/:id/complete` has a supported transition.
+It also shows the current Task status, Task targets, Task status metadata when
+available, newer open tasks for the same Person, and whether queue
+classification treats the inspected task as stale prior-stage work.
+
+Task completion now writes and verifies the completed Task status separately:
+
+```text
+PATCH /rest/tasks/:id { "status": "DONE" }
+GET /rest/tasks/:id
+```
+
+If the status update or verification fails while Person advancement or next-task
+creation succeeds, the API returns partial failure details instead of treating
+the whole completion as clean success.
+
+Stale prior-stage task cleanup planning:
+
+```bash
+npm run tasks:plan-stale-prior-stage-cleanup
+```
+
+This is read-only. It writes local diagnostic files under `data/` for old open
+tasks whose body/dedupe context indicates an earlier cadence stage than the
+linked Person's current stage.
 
 Rep-performance reporting defaults to the MVP baseline date configured by:
 

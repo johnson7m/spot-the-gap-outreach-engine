@@ -218,9 +218,23 @@ export function createTwentyProvider({
       const operations = [];
 
       if (completedTask) {
-        operations.push(
-          await runOperation(() => taskClient.updateTaskById(completedTask), completedTask, new Set())
+        const completedTaskUpdate = await runOperation(
+          () => taskClient.updateTaskById(completedTask),
+          completedTask,
+          new Set()
         );
+        operations.push(completedTaskUpdate);
+
+        const shouldVerifyCompletedTask = completedTaskUpdate.status === 'succeeded' || dryRun;
+        if (shouldVerifyCompletedTask) {
+          operations.push(
+            await runOperation(
+              () => taskClient.verifyTaskCompleted(buildCompletedTaskVerificationOperation(completedTask)),
+              buildCompletedTaskVerificationOperation(completedTask),
+              new Set()
+            )
+          );
+        }
       }
 
       operations.push(
@@ -268,6 +282,18 @@ function taskCompletionSkippedRelationships() {
       reason: 'Relationship writes remain disabled; next task body includes Person ID and cadence context.'
     }
   ];
+}
+
+function buildCompletedTaskVerificationOperation(completedTask) {
+  return {
+    object: 'task',
+    action: 'verify_completed_status',
+    id: completedTask.id,
+    dedupeKey: `${completedTask.dedupeKey}:verify`,
+    payload: {
+      expectedStatus: completedTask.payload?.status ?? 'DONE'
+    }
+  };
 }
 
 async function syncTaskCompletionRelationships({

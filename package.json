@@ -38,6 +38,7 @@
     "queues:recover-missing-next-tasks": "node scripts/recoverMissingNextTasks.js",
     "queues:recover-sent-initial-follow-ups": "node scripts/recoverSentInitialFollowUps.js",
     "tasks:inspect-completion-readiness": "node scripts/inspectTaskCompletionReadiness.js",
+    "tasks:plan-stale-prior-stage-cleanup": "node scripts/planStalePriorStageTaskCleanup.js",
     "reporting:executive": "node scripts/getExecutiveReporting.js",
     "reporting:queue-health": "node scripts/getQueueHealthReporting.js",
     "reporting:rep-performance": "node scripts/getRepPerformanceReporting.js",

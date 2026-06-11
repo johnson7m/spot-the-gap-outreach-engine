@@ -16,8 +16,7 @@ export function createPersonCadenceUpdatePayload({ transition }) {
 
 export function createCompletedTaskUpdatePayload({ transition }) {
   return {
-    status: 'DONE',
-    completedAt: transition.completedAt
+    status: 'DONE'
   };
 }
 

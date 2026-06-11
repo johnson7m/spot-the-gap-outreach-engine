@@ -6,6 +6,16 @@ export function createTaskClient({ dryRun = true, log, restClient } = {}) {
 
     async updateTaskById(operation) {
       return executeUpdateOperation({ ...operation, object: 'task', dryRun, log, restClient });
+    },
+
+    async verifyTaskCompleted(operation) {
+      return executeTaskCompletionVerification({
+        ...operation,
+        object: 'task',
+        dryRun,
+        log,
+        restClient
+      });
     }
   };
 }
@@ -83,10 +93,68 @@ async function executeUpdateOperation({ action, id, dedupeKey, payload, dryRun, 
   };
 }
 
+async function executeTaskCompletionVerification({
+  action,
+  id,
+  dedupeKey,
+  payload,
+  dryRun,
+  log,
+  restClient
+}) {
+  if (dryRun) {
+    log?.info({ object: 'task', action, id, dedupeKey }, 'Twenty Task completion verification skipped in dry-run');
+    return {
+      object: 'task',
+      action,
+      id,
+      status: 'skipped',
+      dedupeKey,
+      payload,
+      reason: 'Completion status verification is skipped in dry-run mode.'
+    };
+  }
+
+  if (!restClient) {
+    throw new Error('Twenty REST client is required for Task verification.');
+  }
+
+  const response = await restClient.getRecord('tasks', id);
+  const actualStatus = normalizeStatus(response?.status);
+  const completed = isCompletedTaskStatus(actualStatus);
+
+  return {
+    object: 'task',
+    action,
+    id,
+    status: completed ? 'succeeded' : 'failed',
+    dedupeKey,
+    payload,
+    response,
+    ...(completed
+      ? {}
+      : {
+          error: {
+            message: `Completed Task verification failed; expected DONE/completed status but found ${actualStatus || 'UNKNOWN'}.`,
+            actualStatus,
+            expectedStatuses: ['DONE', 'COMPLETED', 'COMPLETE']
+          }
+        })
+  };
+}
+
 function taskMatches(record, dedupeKey) {
   const body = record.bodyV2?.markdown ?? record.bodyV2 ?? '';
   return (
     String(body).includes(`Idempotency key: ${dedupeKey}`) ||
     String(body).includes(`Dedupe key: ${dedupeKey}`)
   );
+}
+
+function isCompletedTaskStatus(status) {
+  return ['DONE', 'COMPLETED', 'COMPLETE'].includes(status);
+}
+
+function normalizeStatus(value) {
+  return String(value ?? '').trim().toUpperCase();
 }
