@@ -257,6 +257,7 @@ Current write invalidation hooks:
 - task completion
 - missing next-task apply
 - sent-initial follow-up apply
+- stale prior-stage task cleanup apply
 - manual lead normalization apply
 - legacy retrofit apply
 - legacy owner cleanup apply

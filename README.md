@@ -786,6 +786,38 @@ This is read-only. It writes local diagnostic files under `data/` for old open
 tasks whose body/dedupe context indicates an earlier cadence stage than the
 linked Person's current stage.
 
+Guarded stale prior-stage task cleanup dry-run:
+
+```bash
+npm run tasks:apply-stale-prior-stage-cleanup
+```
+
+The apply path reads `data/stale-prior-stage-task-cleanup-plan.json` and
+remains dry-run unless all live guards are explicitly set. It only patches
+planner-approved Tasks:
+
+```text
+PATCH /rest/tasks/:taskId { "status": "DONE" }
+GET /rest/tasks/:taskId
+```
+
+Live cleanup requires an explicit batch:
+
+```bash
+STALE_PRIOR_STAGE_TASK_CLEANUP_ENABLED=true LIVE_TEST=true STALE_PRIOR_STAGE_TASK_CLEANUP_BATCH_SIZE=5 STALE_PRIOR_STAGE_TASK_CLEANUP_OFFSET=0 npm run tasks:apply-stale-prior-stage-cleanup
+```
+
+Cleanup rules:
+
+- closes only `safeToPlan=true` records from the stale prior-stage planner
+- rechecks the Task before writing and skips Tasks already marked `DONE`
+- verifies the Task status after patching
+- writes `crm_sync_logs` and `outbound_events` with
+  `event_type=stale_prior_stage_task_closed` during live execution
+- invalidates the workspace snapshot after successful live cleanup
+- does not create Tasks, update People, modify cadence fields, or change
+  `taskTargets`
+
 Rep-performance reporting defaults to the MVP baseline date configured by:
 
 ```text
