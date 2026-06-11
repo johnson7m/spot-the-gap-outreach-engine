@@ -107,6 +107,8 @@ Implemented endpoints:
 - `GET /api/reporting/operations`
 - `GET /api/reporting/cadence-analytics`
 - `GET /api/reporting/read-observability`
+- `GET /api/workspace/snapshot/status`
+- `POST /api/workspace/snapshot/refresh`
 
 Planned endpoints:
 
@@ -143,6 +145,7 @@ Approved `leadSource` values:
 | Task complete/pause/resume | `admin`, `rep`, `operator` |
 | Reporting reads | `admin`, `rep`, `operator` |
 | Read observability reporting | `admin`, `operator` |
+| Workspace snapshot status/refresh | `admin`, `operator` |
 | Recovery reads/retries | `admin`, `operator` |
 
 ## POST /api/quick-capture/preview
@@ -655,6 +658,42 @@ Critical queue reads are `people`, `tasks`, and `taskTargets`.
 `assigneeScope=mine` is needed to enforce rep ownership. `noteTargets` and
 `timelineActivities` are non-critical; their failures should be shown as
 warnings/diagnostics without implying the queue is empty.
+
+Queue and CRM-backed reporting responses can also include shared workspace
+snapshot metadata:
+
+```json
+{
+  "snapshot": {
+    "enabled": true,
+    "cacheStatus": "hit",
+    "generatedAt": "2026-06-11T12:00:00.000Z",
+    "expiresAt": "2026-06-11T12:02:00.000Z",
+    "ageSeconds": 23,
+    "ttlSeconds": 120,
+    "forceRefresh": false,
+    "sourceReadStatus": {
+      "status": "ok",
+      "isPartial": false
+    },
+    "readDurationMs": 1842,
+    "objectsIncluded": ["people", "companies", "tasks", "taskTargets"],
+    "countsByObjectType": {
+      "people": 324,
+      "tasks": 96,
+      "taskTargets": 85
+    },
+    "invalidated": false,
+    "invalidationReason": null,
+    "invalidatedAt": null
+  }
+}
+```
+
+`WORKSPACE_SNAPSHOT_ENABLED=true` and `WORKSPACE_SNAPSHOT_TTL_SECONDS=120` are
+the default Phase 1 settings. `forceRefresh=true` bypasses the snapshot and
+rebuilds it from read-only Twenty source data. The snapshot is process-local and
+in-memory in Phase 1.
 
 ## GET /api/queues/summary
 
@@ -1441,6 +1480,34 @@ queue API degraded contract:
 - `data.partialReason="twenty_rate_limited"` when applicable
 - `data.retryAfterSeconds` when available
 - `data.metrics=null` for degraded critical reads without a usable cache
+
+## Workspace Snapshot Diagnostics
+
+```text
+GET /api/workspace/snapshot/status
+POST /api/workspace/snapshot/refresh
+```
+
+Both endpoints require Supabase workspace JWT auth and role `admin` or
+`operator`. Status returns the current in-memory snapshot metadata and summary
+if one exists. Refresh rebuilds the snapshot from Twenty read-only data and
+returns:
+
+- `snapshot`: cache status, generated/expiry timestamps, age, TTL, source read
+  status, read duration, object counts, and invalidation state
+- `countsByObjectType`: compact source record counts
+- `summary`: precomputed queue summary and coverage summary
+
+Refresh performs no CRM writes. Known successful write paths mark the snapshot
+stale so the next queue/reporting read rebuilds it instead of serving data that
+predates a commit, task completion, or migration apply.
+
+Diagnostic scripts:
+
+```bash
+npm run workspace:snapshot:refresh
+npm run workspace:snapshot:status
+```
 
 ## Open Contract Questions
 

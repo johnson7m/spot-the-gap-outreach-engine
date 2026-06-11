@@ -753,6 +753,8 @@ export function normalizeQueueQuery(query = {}, workspaceUser = {}) {
   const dueStatus = normalizeSelect(query.dueStatus);
   const bypassCache =
     query.bypassCache === undefined ? false : normalizeBoolean(query.bypassCache);
+  const forceRefresh =
+    query.forceRefresh === undefined ? false : normalizeBoolean(query.forceRefresh);
 
   return {
     limit,
@@ -771,7 +773,8 @@ export function normalizeQueueQuery(query = {}, workspaceUser = {}) {
     requestedAssigneeScope: requestedAssigneeScope ? requestedAssigneeScope.toLowerCase() : null,
     status: status || null,
     dueStatus: dueStatus ? dueStatus.toLowerCase() : null,
-    bypassCache
+    bypassCache,
+    forceRefresh
   };
 }
 

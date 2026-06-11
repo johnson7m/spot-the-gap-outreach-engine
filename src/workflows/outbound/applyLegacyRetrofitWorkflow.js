@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createTwentyRestClient } from '../../integrations/twenty/restClient.js';
 import { createOperationalStore } from '../../persistence/operationalStore.js';
+import { invalidateWorkspaceSnapshot } from '../../services/workspaceSnapshotService.js';
 import { PROTECTED_ASSESSMENT_FIELDS } from '../../integrations/twenty/quickCaptureClient.js';
 
 export const LEGACY_RETROFIT_OWNER_FIELDS = [
@@ -165,6 +166,10 @@ export async function applyLegacyRetrofitPlan({
   }
 
   const summary = summarizeLiveResults(results);
+
+  if ((summary.succeeded ?? 0) > 0) {
+    invalidateWorkspaceSnapshot('legacy_retrofit_apply');
+  }
 
   return {
     status: summary.failed > 0 ? 'failed' : 'succeeded',

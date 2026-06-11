@@ -4,6 +4,10 @@ import {
   buildQueueCoverageAudit,
   normalizeQueueQuery
 } from '../../services/queueService.js';
+import {
+  getWorkspaceSnapshot,
+  isWorkspaceSnapshotEnabled
+} from '../../services/workspaceSnapshotService.js';
 
 export async function getOutboundQueueWorkflow({
   queueSlug,
@@ -16,37 +20,17 @@ export async function getOutboundQueueWorkflow({
   now = new Date()
 } = {}) {
   const normalizedQuery = normalizeQueueQuery(query, workspaceUser);
-  const source =
-    dataSource ??
-    createTwentyQueueDataSource({
-      config: config.twenty ?? config,
-      queueRead: config.queueRead ?? {},
-      log
-    });
-  const records =
-    typeof source.listAllQueueRecords === 'function'
-      ? await source.listAllQueueRecords({
-          pageSize: 100,
-          maxPages: config.queue?.maxPages ?? config.legacyRetrofit?.maxPages ?? 10,
-          query: normalizedQuery,
-          observabilityContext: buildQueueObservabilityContext({
-            endpoint: `/api/queues/${queueSlug}`,
-            workflow: `queue:${queueSlug}`,
-            workspaceUser,
-            correlationId
-          })
-        })
-      : await source.listQueueRecords({
-          limit: Math.min(Math.max(normalizedQuery.limit + normalizedQuery.offset, 100), 250),
-          offset: 0,
-          query: normalizedQuery,
-          observabilityContext: buildQueueObservabilityContext({
-            endpoint: `/api/queues/${queueSlug}`,
-            workflow: `queue:${queueSlug}`,
-            workspaceUser,
-            correlationId
-          })
-        });
+  const sourceContext = await loadQueueSourceRecords({
+    endpoint: `/api/queues/${queueSlug}`,
+    workflow: `queue:${queueSlug}`,
+    normalizedQuery,
+    config,
+    log,
+    workspaceUser,
+    dataSource,
+    correlationId
+  });
+  const { records, sourceProvider, snapshotMetadata } = sourceContext;
   const queue = buildQueue({
     queueSlug,
     people: records.people,
@@ -86,11 +70,12 @@ export async function getOutboundQueueWorkflow({
       overdueCount: null,
       ownerScope: queue.ownerScope,
       assigneeScope: queue.assigneeScope,
-      dataSource: source.provider ?? 'unknown',
+      dataSource: sourceProvider,
       status: readStatus.status,
       isPartial: true,
       partialReason: readStatus.partialReason,
       retryAfterSeconds: readStatus.retryAfterSeconds,
+      snapshot: snapshotMetadata,
       diagnostics: {
         ...(queue.diagnostics ?? {}),
         timelinePaginationWarning: warningBuckets.timelinePaginationWarning,
@@ -103,11 +88,12 @@ export async function getOutboundQueueWorkflow({
 
   return {
     ...queue,
-    dataSource: source.provider ?? 'unknown',
+    dataSource: sourceProvider,
     status: readStatus.status,
     isPartial: Boolean(readStatus.isPartial),
     partialReason: readStatus.partialReason,
     retryAfterSeconds: readStatus.retryAfterSeconds,
+    snapshot: snapshotMetadata,
     diagnostics: {
       ...(queue.diagnostics ?? {}),
       timelinePaginationWarning: warningBuckets.timelinePaginationWarning,
@@ -128,37 +114,17 @@ export async function getOutboundQueueSummaryWorkflow({
   now = new Date()
 } = {}) {
   const normalizedQuery = normalizeQueueQuery(query, workspaceUser);
-  const source =
-    dataSource ??
-    createTwentyQueueDataSource({
-      config: config.twenty ?? config,
-      queueRead: config.queueRead ?? {},
-      log
-    });
-  const records =
-    typeof source.listAllQueueRecords === 'function'
-      ? await source.listAllQueueRecords({
-          pageSize: 100,
-          maxPages: config.queue?.maxPages ?? config.legacyRetrofit?.maxPages ?? 10,
-          query: normalizedQuery,
-          observabilityContext: buildQueueObservabilityContext({
-            endpoint: '/api/queues/summary',
-            workflow: 'queue:summary',
-            workspaceUser,
-            correlationId
-          })
-        })
-      : await source.listQueueRecords({
-          limit: Math.min(Math.max(normalizedQuery.limit + normalizedQuery.offset, 100), 250),
-          offset: 0,
-          query: normalizedQuery,
-          observabilityContext: buildQueueObservabilityContext({
-            endpoint: '/api/queues/summary',
-            workflow: 'queue:summary',
-            workspaceUser,
-            correlationId
-          })
-        });
+  const sourceContext = await loadQueueSourceRecords({
+    endpoint: '/api/queues/summary',
+    workflow: 'queue:summary',
+    normalizedQuery,
+    config,
+    log,
+    workspaceUser,
+    dataSource,
+    correlationId
+  });
+  const { records, snapshotMetadata } = sourceContext;
   const warningBuckets = splitQueueWarnings({
     recordWarnings: records.warnings ?? [],
     paginationWarnings: buildPaginationWarnings(records.pagination)
@@ -173,6 +139,7 @@ export async function getOutboundQueueSummaryWorkflow({
       isPartial: true,
       partialReason: readStatus.partialReason,
       retryAfterSeconds: readStatus.retryAfterSeconds,
+      snapshot: snapshotMetadata,
       counts: null,
       overdueTasksByQueue: null,
       hiddenTestRecords: null,
@@ -234,6 +201,7 @@ export async function getOutboundQueueSummaryWorkflow({
     isPartial: Boolean(readStatus.isPartial),
     partialReason: readStatus.partialReason,
     retryAfterSeconds: readStatus.retryAfterSeconds,
+    snapshot: snapshotMetadata,
     counts: {
       freshLeads: queues['fresh-leads'].totalCount,
       followUps: queues['follow-ups'].totalCount,
@@ -343,6 +311,79 @@ function buildPaginationWarnings(pagination) {
 
 function uniqueStrings(values) {
   return Array.from(new Set(values.filter((value) => typeof value === 'string' && value.length > 0)));
+}
+
+async function loadQueueSourceRecords({
+  endpoint,
+  workflow,
+  normalizedQuery,
+  config = {},
+  log,
+  workspaceUser,
+  dataSource,
+  correlationId
+} = {}) {
+  const source =
+    dataSource ??
+    createTwentyQueueDataSource({
+      config: config.twenty ?? config,
+      queueRead: config.queueRead ?? {},
+      log
+    });
+  const observabilityContext = buildQueueObservabilityContext({
+    endpoint,
+    workflow,
+    workspaceUser,
+    correlationId
+  });
+
+  if (isWorkspaceSnapshotEnabled(config)) {
+    const snapshot = await getWorkspaceSnapshot({
+      forceRefresh: normalizedQuery.forceRefresh === true || normalizedQuery.forceRefresh === 'true',
+      query: normalizedQuery,
+      config,
+      log,
+      workspaceUser,
+      dataSource: source,
+      observabilityContext
+    });
+
+    return {
+      records: snapshot.records,
+      sourceProvider: snapshot.snapshot?.sourceProvider ?? source.provider ?? 'unknown',
+      snapshotMetadata: snapshot.metadata
+    };
+  }
+
+  const records =
+    typeof source.listAllQueueRecords === 'function'
+      ? await source.listAllQueueRecords({
+          pageSize: 100,
+          maxPages: config.queue?.maxPages ?? config.legacyRetrofit?.maxPages ?? 10,
+          query: normalizedQuery,
+          observabilityContext
+        })
+      : await source.listQueueRecords({
+          limit: Math.min(Math.max(normalizedQuery.limit + normalizedQuery.offset, 100), 250),
+          offset: 0,
+          query: normalizedQuery,
+          observabilityContext
+        });
+
+  return {
+    records,
+    sourceProvider: source.provider ?? 'unknown',
+    snapshotMetadata: {
+      enabled: false,
+      cacheStatus: 'disabled',
+      generatedAt: null,
+      ageSeconds: null,
+      ttlSeconds: config.workspaceSnapshot?.ttlSeconds ?? 120,
+      forceRefresh: false,
+      sourceReadStatus: null,
+      readDurationMs: null
+    }
+  };
 }
 
 function buildQueueObservabilityContext({

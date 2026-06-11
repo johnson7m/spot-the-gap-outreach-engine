@@ -68,6 +68,8 @@ const envSchema = z.object({
   QUEUE_READ_RETRY_BASE_MS: z.coerce.number().int().min(0).default(500),
   QUEUE_READ_CACHE_ENABLED: booleanFromEnv.default(true),
   QUEUE_READ_CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(90),
+  WORKSPACE_SNAPSHOT_ENABLED: booleanFromEnv.default(true),
+  WORKSPACE_SNAPSHOT_TTL_SECONDS: z.coerce.number().int().positive().default(120),
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_MODEL: z.string().optional().default('')
 });
@@ -162,6 +164,10 @@ export function loadConfig() {
       retryBaseMs: parsed.data.QUEUE_READ_RETRY_BASE_MS,
       cacheEnabled: parsed.data.QUEUE_READ_CACHE_ENABLED,
       cacheTtlSeconds: parsed.data.QUEUE_READ_CACHE_TTL_SECONDS
+    },
+    workspaceSnapshot: {
+      enabled: parsed.data.WORKSPACE_SNAPSHOT_ENABLED,
+      ttlSeconds: parsed.data.WORKSPACE_SNAPSHOT_TTL_SECONDS
     },
     openai: {
       apiKey: parsed.data.OPENAI_API_KEY,

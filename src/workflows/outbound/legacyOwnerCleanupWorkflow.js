@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createTwentyRestClient } from '../../integrations/twenty/restClient.js';
 import { createOperationalStore } from '../../persistence/operationalStore.js';
+import { invalidateWorkspaceSnapshot } from '../../services/workspaceSnapshotService.js';
 
 const REPEATED_FAILURE_LIMIT = 2;
 const DEFAULT_OWNER_JOIN_COLUMN = 'ownerId';
@@ -196,6 +197,10 @@ export async function applyLegacyOwnerCleanup({
   }
 
   const summary = summarizeOwnerLiveResults(results);
+
+  if ((summary.succeeded ?? 0) > 0) {
+    invalidateWorkspaceSnapshot('legacy_owner_cleanup_apply');
+  }
 
   return {
     status: summary.failed > 0 || summary.verificationFailed > 0 ? 'failed' : 'succeeded',

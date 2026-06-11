@@ -19,7 +19,7 @@ export async function getCadenceAnalyticsReportingWorkflow({
   requestSource,
   now = new Date()
 } = {}) {
-  const { records, source, readStatus, warnings, isCriticalDegraded } =
+  const { records, source, readStatus, warnings, isCriticalDegraded, snapshotMetadata } =
     await loadReportingSourceRecords({
       query,
       config,
@@ -46,7 +46,8 @@ export async function getCadenceAnalyticsReportingWorkflow({
       reportName: 'cadence-analytics',
       readStatus,
       dataSource: source.provider ?? 'unknown',
-      warnings: combinedWarnings
+      warnings: combinedWarnings,
+      snapshot: snapshotMetadata
     });
   }
 
@@ -70,6 +71,7 @@ export async function getCadenceAnalyticsReportingWorkflow({
     report,
     source,
     readStatus,
-    warnings: combinedWarnings
+    warnings: combinedWarnings,
+    snapshot: snapshotMetadata
   });
 }

@@ -16,7 +16,7 @@ export async function getQueueHealthReportingWorkflow({
   requestSource,
   now = new Date()
 } = {}) {
-  const { records, source, readStatus, warnings, isCriticalDegraded } =
+  const { records, source, readStatus, warnings, isCriticalDegraded, snapshotMetadata } =
     await loadReportingSourceRecords({
       query,
       config,
@@ -36,7 +36,8 @@ export async function getQueueHealthReportingWorkflow({
       reportName: 'queue-health',
       readStatus,
       dataSource: source.provider ?? 'unknown',
-      warnings
+      warnings,
+      snapshot: snapshotMetadata
     });
   }
 
@@ -55,6 +56,7 @@ export async function getQueueHealthReportingWorkflow({
     report,
     source,
     readStatus,
-    warnings
+    warnings,
+    snapshot: snapshotMetadata
   });
 }

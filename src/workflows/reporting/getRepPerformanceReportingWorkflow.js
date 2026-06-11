@@ -19,7 +19,7 @@ export async function getRepPerformanceReportingWorkflow({
   requestSource,
   now = new Date()
 } = {}) {
-  const { records, source, readStatus, warnings, isCriticalDegraded } =
+  const { records, source, readStatus, warnings, isCriticalDegraded, snapshotMetadata } =
     await loadReportingSourceRecords({
       query,
       config,
@@ -46,7 +46,8 @@ export async function getRepPerformanceReportingWorkflow({
       reportName: 'rep-performance',
       readStatus,
       dataSource: source.provider ?? 'unknown',
-      warnings: combinedWarnings
+      warnings: combinedWarnings,
+      snapshot: snapshotMetadata
     });
   }
 
@@ -68,6 +69,7 @@ export async function getRepPerformanceReportingWorkflow({
     report,
     source,
     readStatus,
-    warnings: combinedWarnings
+    warnings: combinedWarnings,
+    snapshot: snapshotMetadata
   });
 }

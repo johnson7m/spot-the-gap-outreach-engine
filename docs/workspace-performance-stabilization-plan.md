@@ -190,7 +190,7 @@ Implemented read observability:
 
 ### Phase 2: Workspace Snapshot
 
-Add a shared snapshot layer in the outreach engine:
+Phase 1 of the shared snapshot layer is implemented in the outreach engine:
 
 ```text
 Twenty source reads
@@ -200,35 +200,67 @@ Twenty source reads
   -> workspace UI
 ```
 
-Candidate endpoint:
+Snapshot endpoints:
 
 ```text
-GET /api/workspace/snapshot
+GET /api/workspace/snapshot/status
+POST /api/workspace/snapshot/refresh
 ```
 
 Snapshot contents:
 
 - generatedAt
-- lastSuccessfulCrmReadAt
+- expiresAt
+- ageSeconds
+- ttlSeconds
 - sourceReadStatus
 - cacheStatus
+- readDurationMs
+- objectsIncluded
+- countsByObjectType
 - queueCounts
 - overdueCountsByQueue
 - countsByDisposition
 - hiddenTestRecords
 - compact queue/reporting freshness metadata
+- invalidationReason and invalidatedAt when writes mark the snapshot stale
 
 Storage options:
 
-- in-memory cache for current single-instance staging
+- in-memory cache for current single-instance staging (implemented)
 - Supabase `workspace_snapshots` table for multi-instance or audit visibility
+  (future)
 
 Refresh behavior:
 
 - normal UI reads use the latest fresh snapshot
-- explicit Refresh can request a new snapshot if outside TTL
-- admin/operator can use `forceRefresh=true` behind a guarded diagnostic control
-- after writes, invalidate affected snapshot slices and return sync guidance
+- queue and CRM-backed reporting endpoints use the snapshot when
+  `WORKSPACE_SNAPSHOT_ENABLED=true`
+- default TTL is `WORKSPACE_SNAPSHOT_TTL_SECONDS=120`
+- `forceRefresh=true` bypasses the snapshot and rebuilds from read-only Twenty
+  source data
+- admin/operator can use `POST /api/workspace/snapshot/refresh` for a guarded
+  read-only refresh
+- after known successful writes, the engine marks the process-local snapshot
+  stale so the next queue/reporting read rebuilds it
+
+Diagnostic scripts:
+
+```bash
+npm run workspace:snapshot:refresh
+npm run workspace:snapshot:status
+```
+
+Current write invalidation hooks:
+
+- Quick Capture commit
+- task completion
+- missing next-task apply
+- sent-initial follow-up apply
+- manual lead normalization apply
+- legacy retrofit apply
+- legacy owner cleanup apply
+- legacy task relationship apply
 
 ### Phase 3: Slice-Specific Incremental Reads
 

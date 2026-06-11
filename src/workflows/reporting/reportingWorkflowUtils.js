@@ -1,6 +1,10 @@
 import { createTwentyQueueDataSource } from '../../integrations/twenty/queueDataSource.js';
 import { createSupabaseClient } from '../../integrations/supabase/client.js';
 import { normalizeQueueQuery } from '../../services/queueService.js';
+import {
+  getWorkspaceSnapshot,
+  isWorkspaceSnapshotEnabled
+} from '../../services/workspaceSnapshotService.js';
 
 export async function loadReportingSourceRecords({
   query = {},
@@ -18,26 +22,15 @@ export async function loadReportingSourceRecords({
       queueRead: config.queueRead ?? {},
       log
     });
-  const records =
-    typeof source.listAllQueueRecords === 'function'
-      ? await source.listAllQueueRecords({
-          pageSize: 100,
-          maxPages: config.queue?.maxPages ?? config.legacyRetrofit?.maxPages ?? 10,
-          query: normalizedQuery,
-          observabilityContext: buildReportingObservabilityContext({
-            observabilityContext,
-            workspaceUser
-          })
-        })
-      : await source.listQueueRecords({
-          limit: Math.min(Math.max(normalizedQuery.limit + normalizedQuery.offset, 100), 250),
-          offset: 0,
-          query: normalizedQuery,
-          observabilityContext: buildReportingObservabilityContext({
-            observabilityContext,
-            workspaceUser
-          })
-        });
+  const sourceContext = await loadReportingQueueRecords({
+    source,
+    normalizedQuery,
+    config,
+    log,
+    workspaceUser,
+    observabilityContext
+  });
+  const { records, snapshotMetadata } = sourceContext;
   const readStatus = normalizeReportingReadStatus(records.readStatus);
   const warnings = uniqueStrings([
     ...(records.warnings ?? []),
@@ -49,7 +42,8 @@ export async function loadReportingSourceRecords({
     source,
     readStatus,
     warnings,
-    isCriticalDegraded: isCriticalReadDegraded(readStatus)
+    isCriticalDegraded: isCriticalReadDegraded(readStatus),
+    snapshotMetadata
   };
 }
 
@@ -119,6 +113,7 @@ export function buildDegradedReportingResult({
   readStatus = {},
   dataSource = 'unknown',
   warnings = [],
+  snapshot,
   diagnostics = {}
 } = {}) {
   return {
@@ -129,6 +124,7 @@ export function buildDegradedReportingResult({
     isPartial: true,
     partialReason: readStatus.partialReason,
     retryAfterSeconds: readStatus.retryAfterSeconds,
+    snapshot,
     metrics: null,
     diagnostics: {
       queueReadStatus: readStatus,
@@ -204,6 +200,7 @@ export function attachReportingReadMetadata({
   source,
   readStatus,
   warnings = [],
+  snapshot,
   diagnostics = {}
 } = {}) {
   return {
@@ -213,6 +210,7 @@ export function attachReportingReadMetadata({
     isPartial: Boolean(readStatus.isPartial),
     partialReason: readStatus.partialReason,
     retryAfterSeconds: readStatus.retryAfterSeconds,
+    snapshot,
     diagnostics: report.diagnostics
       ? {
           ...report.diagnostics,
@@ -267,6 +265,66 @@ function buildReportingReadWarnings(readStatus = {}) {
 
 function uniqueStrings(values = []) {
   return Array.from(new Set(values.filter((value) => typeof value === 'string' && value.length > 0)));
+}
+
+async function loadReportingQueueRecords({
+  source,
+  normalizedQuery,
+  config = {},
+  log,
+  workspaceUser,
+  observabilityContext = {}
+} = {}) {
+  const resolvedObservabilityContext = buildReportingObservabilityContext({
+    observabilityContext,
+    workspaceUser
+  });
+
+  if (isWorkspaceSnapshotEnabled(config)) {
+    const snapshot = await getWorkspaceSnapshot({
+      forceRefresh: normalizedQuery.forceRefresh,
+      query: normalizedQuery,
+      config,
+      log,
+      workspaceUser,
+      dataSource: source,
+      observabilityContext: resolvedObservabilityContext
+    });
+
+    return {
+      records: snapshot.records,
+      snapshotMetadata: snapshot.metadata
+    };
+  }
+
+  const records =
+    typeof source.listAllQueueRecords === 'function'
+      ? await source.listAllQueueRecords({
+          pageSize: 100,
+          maxPages: config.queue?.maxPages ?? config.legacyRetrofit?.maxPages ?? 10,
+          query: normalizedQuery,
+          observabilityContext: resolvedObservabilityContext
+        })
+      : await source.listQueueRecords({
+          limit: Math.min(Math.max(normalizedQuery.limit + normalizedQuery.offset, 100), 250),
+          offset: 0,
+          query: normalizedQuery,
+          observabilityContext: resolvedObservabilityContext
+        });
+
+  return {
+    records,
+    snapshotMetadata: {
+      enabled: false,
+      cacheStatus: 'disabled',
+      generatedAt: null,
+      ageSeconds: null,
+      ttlSeconds: config.workspaceSnapshot?.ttlSeconds ?? 120,
+      forceRefresh: false,
+      sourceReadStatus: null,
+      readDurationMs: null
+    }
+  };
 }
 
 function buildReportingObservabilityContext({

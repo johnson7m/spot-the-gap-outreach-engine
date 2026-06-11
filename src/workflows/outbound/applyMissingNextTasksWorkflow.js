@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { createTwentyRestClient } from '../../integrations/twenty/restClient.js';
 import { buildNextTaskDedupeKey } from '../../integrations/twenty/taskCompletionPayloadBuilders.js';
 import { createOperationalStore } from '../../persistence/operationalStore.js';
+import { invalidateWorkspaceSnapshot } from '../../services/workspaceSnapshotService.js';
 import { resolveSafeMissingNextTaskDueDate } from '../../utils/projectDate.js';
 
 const REPEATED_FAILURE_LIMIT = 2;
@@ -297,6 +298,10 @@ export async function applyMissingNextTaskPlan({
     summary,
     options: normalizedOptions
   });
+
+  if ((summary.succeeded ?? 0) > 0) {
+    invalidateWorkspaceSnapshot('missing_next_task_apply');
+  }
 
   return {
     status: determineMissingNextTaskStatus(summary),

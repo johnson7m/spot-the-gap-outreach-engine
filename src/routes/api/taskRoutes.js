@@ -2,6 +2,7 @@ import express from 'express';
 import { createCrmAdapter } from '../../integrations/crm/crmAdapter.js';
 import { requireWorkspaceAuth } from '../../middleware/supabaseWorkspaceAuth.js';
 import { createOperationalStore } from '../../persistence/operationalStore.js';
+import { invalidateWorkspaceSnapshot } from '../../services/workspaceSnapshotService.js';
 import { completeOutboundTaskWorkflow } from '../../workflows/outbound/completeTaskWorkflow.js';
 
 const TASK_COMPLETION_WORKSPACE_ROLES = ['admin', 'operator', 'rep'];
@@ -71,6 +72,10 @@ export async function handleTaskComplete(
       operationalStore,
       correlationId: req.correlationId
     });
+
+    if (hasSuccessfulTaskCompletionWrite(result)) {
+      invalidateWorkspaceSnapshot('task_completion');
+    }
 
     res.status(getStatusCode(result.status)).json(successEnvelope({
       correlationId: req.correlationId,
@@ -155,6 +160,13 @@ function getStatusCode(status) {
   }
 
   return 202;
+}
+
+function hasSuccessfulTaskCompletionWrite(result = {}) {
+  return [
+    ...(result.crmSync?.operations ?? []),
+    ...(result.crmSync?.relationshipResults ?? [])
+  ].some((operation) => operation.status === 'succeeded');
 }
 
 function handleTaskCompletionError(error, req, res, next) {

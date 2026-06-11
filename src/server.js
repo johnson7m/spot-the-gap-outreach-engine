@@ -10,6 +10,7 @@ import { createQuickCaptureApiRouter } from './routes/api/quickCaptureRoutes.js'
 import { createQueueApiRouter } from './routes/api/queueRoutes.js';
 import { createReportingApiRouter } from './routes/api/reportingRoutes.js';
 import { createTaskApiRouter } from './routes/api/taskRoutes.js';
+import { createWorkspaceSnapshotApiRouter } from './routes/api/workspaceSnapshotRoutes.js';
 import { processAssessmentSubmission } from './workflows/assessmentWorkflow.js';
 import { createCorrelationId } from './utils/idempotency.js';
 
@@ -19,7 +20,8 @@ export function createApp({
   quickCaptureApiDependencies = {},
   queueApiDependencies = {},
   reportingApiDependencies = {},
-  taskApiDependencies = {}
+  taskApiDependencies = {},
+  workspaceSnapshotApiDependencies = {}
 } = {}) {
   const app = express();
 
@@ -76,6 +78,15 @@ export function createApp({
       config,
       log: appLogger,
       ...reportingApiDependencies
+    })
+  );
+
+  app.use(
+    '/api/workspace/snapshot',
+    createWorkspaceSnapshotApiRouter({
+      config,
+      log: appLogger,
+      ...workspaceSnapshotApiDependencies
     })
   );
 

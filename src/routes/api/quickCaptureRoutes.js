@@ -6,6 +6,7 @@ import {
   createSupabaseWorkspaceAuth,
   requireWorkspaceAuthOrSecret
 } from '../../middleware/supabaseWorkspaceAuth.js';
+import { invalidateWorkspaceSnapshot } from '../../services/workspaceSnapshotService.js';
 import { sanitizeWorkspaceUser } from '../../utils/outboundActorMapper.js';
 import { processQuickCaptureLead } from '../../workflows/outbound/quickCaptureWorkflow.js';
 
@@ -193,6 +194,11 @@ export async function handleQuickCaptureCommit(
           crmSync
         })
       : [];
+
+    if (hasSuccessfulCrmWrite(crmSync)) {
+      invalidateWorkspaceSnapshot('quick_capture_commit');
+    }
+
     const statusCode = ['failed', 'partial_failure', 'blocked_configuration'].includes(
       crmSync.status
     )
@@ -377,6 +383,13 @@ function validateCommitGuards(config = {}) {
   }
 
   return null;
+}
+
+function hasSuccessfulCrmWrite(crmSync = {}) {
+  return [
+    ...(crmSync.operations ?? []),
+    ...(crmSync.relationshipResults ?? [])
+  ].some((operation) => operation.status === 'succeeded');
 }
 
 async function appendQuickCaptureCrmAuditLogs({ store, plan, crmSync }) {

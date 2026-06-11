@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createTwentyRestClient } from '../../integrations/twenty/restClient.js';
 import { createOperationalStore } from '../../persistence/operationalStore.js';
+import { invalidateWorkspaceSnapshot } from '../../services/workspaceSnapshotService.js';
 
 const REPEATED_FAILURE_LIMIT = 2;
 const ALLOWED_CONFIDENCE = new Set(['high', 'medium']);
@@ -207,6 +208,10 @@ export async function applyLegacyTaskRetrofitPlan({
   }
 
   const summary = summarizeTaskLiveResults(results);
+
+  if ((summary.succeeded ?? 0) > 0) {
+    invalidateWorkspaceSnapshot('legacy_task_retrofit_apply');
+  }
 
   return {
     status: summary.failed > 0 || summary.verificationFailed > 0 ? 'failed' : 'succeeded',

@@ -127,6 +127,8 @@ GET /api/reporting/rep-performance
 GET /api/reporting/operations
 GET /api/reporting/cadence-analytics
 GET /api/reporting/read-observability
+GET /api/workspace/snapshot/status
+POST /api/workspace/snapshot/refresh
 ```
 
 Preview is dry-run only and is intended for the internal
@@ -535,7 +537,18 @@ QUEUE_READ_RETRY_MAX_ATTEMPTS=2
 QUEUE_READ_RETRY_BASE_MS=500
 QUEUE_READ_CACHE_ENABLED=true
 QUEUE_READ_CACHE_TTL_SECONDS=90
+WORKSPACE_SNAPSHOT_ENABLED=true
+WORKSPACE_SNAPSHOT_TTL_SECONDS=120
 ```
+
+The workspace snapshot layer is a normal pre-read cache shared by queues and
+CRM-backed reporting endpoints. It stores the latest full Twenty source read,
+classification output, queue summary, object counts, read duration, and source
+read status for 120 seconds by default. Queue and reporting responses include a
+`snapshot` metadata object with `cacheStatus`, `generatedAt`, `ageSeconds`,
+`ttlSeconds`, `sourceReadStatus`, `readDurationMs`, and object counts. This is
+separate from the older `QUEUE_READ_CACHE_*` fallback cache, which exists mainly
+to return stale data during degraded/rate-limited Twenty reads.
 
 Queue pagination:
 
@@ -622,6 +635,8 @@ GET /api/reporting/rep-performance
 GET /api/reporting/operations
 GET /api/reporting/cadence-analytics
 GET /api/reporting/read-observability
+GET /api/workspace/snapshot/status
+POST /api/workspace/snapshot/refresh
 ```
 
 These endpoints require Supabase workspace JWT auth and role `admin`,
@@ -640,6 +655,8 @@ are not mistaken for fully historical funnel rates.
 Read Observability is admin/operator-only and reports process-local Twenty read
 instrumentation for endpoint/workflow duration, cache status, fetched records,
 fetched pages, duplicate-read estimates, and snapshot-layer opportunities.
+Snapshot status/refresh endpoints are admin/operator-only. Refresh rebuilds the
+snapshot from Twenty read-only data and performs no CRM writes.
 
 Diagnostic scripts:
 
@@ -650,6 +667,8 @@ npm run reporting:rep-performance
 npm run reporting:operations
 npm run reporting:cadence-analytics
 npm run reporting:read-observability
+npm run workspace:snapshot:refresh
+npm run workspace:snapshot:status
 ```
 
 Set `REPORTING_OWNER_SCOPE=mine|all`, `REPORTING_ASSIGNEE_SCOPE=mine|all`,

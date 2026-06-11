@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createTwentyRestClient } from '../../integrations/twenty/restClient.js';
 import { createOperationalStore } from '../../persistence/operationalStore.js';
+import { invalidateWorkspaceSnapshot } from '../../services/workspaceSnapshotService.js';
 
 export const MANUAL_LEAD_NORMALIZATION_ALLOWED_FIELDS = [
   'outboundPipelineType',
@@ -247,6 +248,10 @@ export async function applyManualLeadNormalizationPlan({
   }
 
   const summary = summarizeManualLeadNormalizationLiveResults(results);
+
+  if ((summary.succeeded ?? 0) > 0) {
+    invalidateWorkspaceSnapshot('manual_lead_normalization_apply');
+  }
 
   return {
     status: summary.failed > 0 || summary.verificationFailed > 0 ? 'failed' : 'succeeded',

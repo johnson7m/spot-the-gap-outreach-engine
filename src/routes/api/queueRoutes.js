@@ -111,6 +111,7 @@ export async function handleQueueFetch(
           isPartial: result.isPartial,
           partialReason: result.partialReason,
           retryAfterSeconds: result.retryAfterSeconds,
+          snapshot: result.snapshot,
           diagnostics: result.diagnostics,
           warnings: result.warnings
         },
